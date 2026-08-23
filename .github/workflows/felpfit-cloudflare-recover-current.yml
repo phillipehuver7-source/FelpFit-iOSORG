@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - ".github/workflows/felpfit-cloudflare-recover-current.yml"
+  issues:
+    types: [opened]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +15,7 @@ permissions:
 
 jobs:
   recover:
+    if: github.event_name != 'issues' || github.event.issue.title == 'FelpFit Cloudflare Source Inspection Trigger'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -83,7 +86,7 @@ PY
           fi
 
           STATUS="$(curl -sS -o "$OUT/workers-list.raw.json" -w '%{http_code}' -H "$AUTH" "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts")"
-          if [ "$STATUS" = "200" ] && jq -e '.success == true' "$OUT/workers-list.raw.json" >/dev/null 2>&1; then
+          if [ "$STATUS" = "200" ] && jq -e '.success == true' "$OUT/workers-list.raw.json >/dev/null 2>&1; then
             jq '[.result[] | {id:(.id // .name // ""), modified_on:(.modified_on // "")} | select((.id|ascii_downcase|contains("felp")) or (.id|ascii_downcase|contains("page")))]' "$OUT/workers-list.raw.json" > "$OUT/related-worker-names.json"
           fi
           rm -f "$OUT/workers-list.raw.json"
