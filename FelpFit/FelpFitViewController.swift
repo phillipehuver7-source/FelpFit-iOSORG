@@ -328,7 +328,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             cleanupScript,
             arguments: [:],
             in: nil,
-            contentWorld: .page
+            in: .page
         ) { [weak self] _ in
             self?.reloadAfterCacheCleanup()
         }
