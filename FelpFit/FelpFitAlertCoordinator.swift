@@ -25,6 +25,7 @@ struct FelpFitScheduleItem: Hashable, Codable {
     let dateKey: String?
     let calendarDate: String?
     let category: String
+    let defaultUrgent: Bool?
 
     init?(dictionary: [String: Any]) {
         guard
@@ -48,6 +49,7 @@ struct FelpFitScheduleItem: Hashable, Codable {
         self.dateKey = dictionary["dateKey"] as? String
         self.calendarDate = dictionary["calendarDate"] as? String
         self.category = (dictionary["category"] as? String) ?? "mission"
+        self.defaultUrgent = (dictionary["defaultUrgent"] as? Bool) ?? (self.category == "mission")
     }
 
     var fireDate: Date? {
@@ -131,7 +133,7 @@ final class FelpFitAlertCoordinator {
     }
 
     private func isUrgent(_ item: FelpFitScheduleItem) -> Bool {
-        urgentByKey[item.preferenceKey] ?? (item.category == "mission")
+        urgentByKey[item.preferenceKey] ?? item.defaultUrgent ?? (item.category == "mission")
     }
 
     func getState() async -> [String: Any] {
@@ -655,7 +657,8 @@ private extension FelpFitScheduleItem {
         questionID: String?,
         dateKey: String?,
         calendarDate: String?,
-        category: String
+        category: String,
+        defaultUrgent: Bool? = nil
     ) {
         self.key = key
         self.preferenceKey = preferenceKey
@@ -670,5 +673,6 @@ private extension FelpFitScheduleItem {
         self.dateKey = dateKey
         self.calendarDate = calendarDate
         self.category = category
+        self.defaultUrgent = defaultUrgent ?? (category == "mission")
     }
 }

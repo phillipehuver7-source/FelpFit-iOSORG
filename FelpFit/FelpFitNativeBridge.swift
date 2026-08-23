@@ -41,7 +41,7 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:150,
+        nativeBuild:151,
         verifiedPendingNotificationCount:0,
         scheduleErrors:[],
         remotePushSupported:true,
@@ -484,6 +484,10 @@ struct FelpFitNativeBridge {
 
       window.__felpfitNativeReceive = (payload) => {
         if(!payload || typeof payload!=="object") return;
+        if(payload.type==="savedCredentials"){
+          try { window.__felpfitApplySavedCredentials?.(payload); } catch {}
+          return;
+        }
         state={...state,...payload};
         if(payload.type==="webUpdate"){
           state.webUpdateAvailable=payload.available===true;
@@ -515,8 +519,8 @@ struct FelpFitNativeBridge {
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
         engineVersion:"2.0",
-        nativeBuild:150,
-        capabilities:["alerts-v2","alarmkit-v1","paired-alerts-v1","deep-links-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2"],
+        nativeBuild:151,
+        capabilities:["alerts-v2","alarmkit-v1","paired-alerts-v1","deep-links-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2","native-keychain-credentials-v1","notification-intents-v2","update-lifecycle-notifications-v2"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),
         getState:()=>postNative({command:"getState"}),

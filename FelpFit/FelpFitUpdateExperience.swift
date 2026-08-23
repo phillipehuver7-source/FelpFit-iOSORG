@@ -9,9 +9,6 @@ struct FelpFitUpdateExperience {
       const NATIVE_BUILD = 150;
       let activePayload = null;
       let activeStep = 0;
-      let rememberedSections = [];
-      let rememberedScroll = 0;
-      let restoreQueued = false;
 
       const postNative = payload => {
         try {
@@ -192,21 +189,7 @@ struct FelpFitUpdateExperience {
         wrapped.__ff15Wrapped = true; wrapped.__ff15Original = original; window.__felpfitNativeReceive = wrapped;
       }
 
-      function rememberAlertCenterState() {
-        const modal = document.querySelector("#notificationModal .modal"); if (!modal) return;
-        rememberedScroll = modal.scrollTop || 0;
-        rememberedSections = [...modal.querySelectorAll("details")].filter(d=>d.open).map(d=>(d.querySelector("summary b")?.textContent||d.querySelector("summary")?.textContent||"").trim()).filter(Boolean);
-      }
-      function restoreAlertCenterState() {
-        restoreQueued = false; const modal = document.querySelector("#notificationModal .modal"); if (!modal || !rememberedSections.length) return;
-        modal.querySelectorAll("details").forEach(d=>{const title=(d.querySelector("summary b")?.textContent||d.querySelector("summary")?.textContent||"").trim();d.open=rememberedSections.includes(title);}); modal.scrollTop=rememberedScroll;
-      }
-      function queueRestore(){if(restoreQueued)return;restoreQueued=true;requestAnimationFrame(()=>requestAnimationFrame(restoreAlertCenterState));}
-      function optimisticToggle(button){const row=button.closest(".ff-native-row");const action=button.dataset.action;if(action==="enabled"){const next=!button.classList.contains("on");button.classList.toggle("on",next);button.textContent=/alarme/i.test(button.textContent||"")?(next?"✓ Alarme ativo":"○ Alarme desativado"):(next?"ON":"OFF");row?.classList.toggle("off",!next);const urgent=row?.querySelector('[data-action="urgent"]');if(urgent)urgent.disabled=!next;}else if(action==="urgent"){const next=!button.classList.contains("on");button.classList.toggle("on",next);button.textContent=/modo|notifica/i.test(button.textContent||"")?(next?"🚨 Modo urgente":"🔔 Notificação normal"):(next?"🚨":"🔔");}}
-      document.addEventListener("pointerdown",event=>{if(event.target.closest?.("#notificationModal"))rememberAlertCenterState();},true);
-      document.addEventListener("click",event=>{const button=event.target.closest?.("#notificationModal [data-action][data-key]");if(!button)return;rememberAlertCenterState();optimisticToggle(button);},true);
       document.addEventListener("keydown",event=>{if(document.getElementById("ff15-update-root")&&event.key==="Escape"){event.preventDefault();event.stopImmediatePropagation();}},true);
-      const mutationObserver=new MutationObserver(records=>{if(!rememberedSections.length)return;if(records.some(record=>record.target.closest?.("#notificationModal")||document.getElementById("notificationModal")?.contains(record.target)))queueRestore();});mutationObserver.observe(document.documentElement,{childList:true,subtree:true});
       const updateGuardObserver=new MutationObserver(()=>{if(activePayload?.available===true&&!document.getElementById("ff15-update-root"))showExperience(activePayload);});updateGuardObserver.observe(document.documentElement,{childList:true,subtree:true});
 
       installReceiveHook();

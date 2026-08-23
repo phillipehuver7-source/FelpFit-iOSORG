@@ -6,7 +6,7 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
-    private static let nativeBuild = 150
+    private static let nativeBuild = 151
     private static let updateNotificationPrefix = "felpfit.webupdate."
 
     private let updateCoordinator = FelpFitUpdateCoordinator.shared
@@ -99,6 +99,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         )
 
         loadFelpFit()
+        Task { await scheduleNativeBuildInstalledNotificationIfNeeded() }
     }
 
     deinit {
@@ -133,6 +134,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         guard webView.url != nil else { return }
 
         presentPendingUpdateIfNeeded()
+        Task { await scheduleNativeBuildInstalledNotificationIfNeeded() }
 
         if alertSyncBlockedUntil.map({ Date() >= $0 }) ?? true {
             webView.evaluateJavaScript("window.__felpfitNativeSync && window.__felpfitNativeSync();")
@@ -444,6 +446,9 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         }
         setUpdateBlocking(true)
         sendPayloadToWeb(pendingUpdatePayload(updating: updating, error: error))
+        if let error, !error.isEmpty, let pending = updateCoordinator.pendingUpdate {
+            Task { await scheduleUpdateLifecycleNotification(kind: "error", version: pending.version, detail: error) }
+        }
     }
 
     private func setUpdateBlocking(_ blocked: Bool) {
@@ -466,6 +471,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                 "version": version,
                 "remoteVersion": completed.version
             ])
+            Task { await scheduleUpdateLifecycleNotification(kind: "success", version: version, detail: "") }
             applyPendingNotificationIntentIfPossible()
             return
         }
@@ -668,9 +674,14 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
     // MARK: - JavaScript <-> Swift bridge
 
+    private func isTrustedBridgeMessage(_ message: WKScriptMessage) -> Bool {
+        message.frameInfo.isMainFrame && message.frameInfo.securityOrigin.host.lowercased() == Self.appURL.host
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard
             message.name == Self.bridgeName,
+            isTrustedBridgeMessage(message),
             let body = message.body as? [String: Any],
             let command = body["command"] as? String
         else { return }
@@ -724,6 +735,25 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                 }
                 payload = FelpFitPushCoordinator.shared.stateDictionary()
 
+            case "saveCredentials":
+                let username = String(describing: body["username"] ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let password = String(describing: body["password"] ?? "")
+                payload = await requestCredentialSave(username: username, password: password)
+
+            case "getSavedCredentials":
+                if let saved = FelpFitCredentialStore.shared.load() {
+                    payload = [
+                        "type": "savedCredentials",
+                        "available": true,
+                        "username": saved.username,
+                        "password": saved.password
+                    ]
+                } else {
+                    payload = ["type": "savedCredentials", "available": false]
+                }
+
             case "webVersion":
                 let version = String(describing: body["version"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run { [weak self] in self?.handleReportedWebVersion(version) }
@@ -756,7 +786,10 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                     "release-notes-v1",
                     "remote-push-v1",
                     "notification-actions-v1",
-                    "notification-diagnostics-v2"
+                    "notification-diagnostics-v2",
+                    "native-keychain-credentials-v1",
+                    "notification-intents-v2",
+                    "update-lifecycle-notifications-v2"
                 ]
                 payload = capabilities
 
@@ -777,7 +810,108 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             let json = String(data: data, encoding: .utf8)
         else { return }
 
+        if (payload["type"] as? String) == "savedCredentials" {
+            webView.evaluateJavaScript("window.__felpfitApplySavedCredentials?.(\(json));")
+            return
+        }
         webView.evaluateJavaScript("window.__felpfitNativeReceive && window.__felpfitNativeReceive(\(json));")
+    }
+
+    @MainActor
+    private func requestCredentialSave(username: String, password: String) async -> [String: Any] {
+        guard !username.isEmpty, !password.isEmpty else {
+            return ["type": "credentialSave", "saved": false, "message": "Preencha usuário e senha."]
+        }
+        if let existing = FelpFitCredentialStore.shared.load(),
+           existing.username == username,
+           existing.password == password {
+            return ["type": "credentialSave", "saved": true]
+        }
+        guard presentedViewController == nil else {
+            return ["type": "credentialSave", "saved": false]
+        }
+
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(
+                title: "Salvar senha no iPhone?",
+                message: "O FelpFit pode guardar esta conta com segurança no Chaves do iPhone e preencher o login nas próximas vezes.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Agora não", style: .cancel) { _ in
+                continuation.resume(returning: ["type": "credentialSave", "saved": false])
+            })
+            alert.addAction(UIAlertAction(title: "Salvar senha", style: .default) { _ in
+                let saved = FelpFitCredentialStore.shared.save(username: username, password: password)
+                continuation.resume(returning: [
+                    "type": "credentialSave",
+                    "saved": saved,
+                    "message": saved ? "Senha salva com segurança neste iPhone." : "Não foi possível salvar a senha."
+                ])
+            })
+            present(alert, animated: true)
+        }
+    }
+
+    private func scheduleUpdateLifecycleNotification(kind: String, version: String, detail: String) async {
+        guard kind == "error" || kind == "success" else { return }
+        let dedupe = "felpfit.update.lifecycle.\(kind).\(Self.shortDigest(version + "|" + detail))"
+        guard !UserDefaults.standard.bool(forKey: dedupe) else { return }
+
+        let center = UNUserNotificationCenter.current()
+        var settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            settings = await center.notificationSettings()
+        }
+        guard canUseNotifications(settings.authorizationStatus) else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = kind == "success" ? "✅ FelpFit \(version) atualizado" : "⚠️ Atualização não concluída"
+        content.body = kind == "success"
+            ? "A nova versão foi confirmada. Toque para voltar ao FelpFit."
+            : "\(detail) Toque para tentar novamente."
+        content.sound = .default
+        content.categoryIdentifier = "FELPFIT_UPDATE"
+        content.threadIdentifier = "felpfit.update"
+        content.userInfo = ["type": "webUpdate", "version": version, "lifecycleKind": kind]
+
+        let identifier = Self.updateNotificationPrefix + "lifecycle." + Self.shortDigest(kind + "|" + version + "|" + detail)
+        do {
+            try await center.add(UNNotificationRequest(
+                identifier: identifier,
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            ))
+            UserDefaults.standard.set(true, forKey: dedupe)
+        } catch {
+            // A experiência visual obrigatória continua disponível mesmo se o iOS recusar o aviso.
+        }
+    }
+
+    private func scheduleNativeBuildInstalledNotificationIfNeeded() async {
+        let key = "felpfit.nativeBuild.readyNotification.\(Self.nativeBuild)"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard canUseNotifications(settings.authorizationStatus) else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "✅ FelpFit atualizado"
+        content.body = "A build \(Self.nativeBuild) está pronta com senha protegida e abertura confiável dos avisos."
+        content.sound = .default
+        content.categoryIdentifier = "FELPFIT_UPDATE"
+        content.threadIdentifier = "felpfit.update"
+        content.userInfo = ["type": "nativeBuildReady", "nativeBuild": Self.nativeBuild]
+
+        do {
+            try await center.add(UNNotificationRequest(
+                identifier: "felpfit.nativeBuild.ready.\(Self.nativeBuild)",
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
+            ))
+            UserDefaults.standard.set(true, forKey: key)
+        } catch {}
     }
 
     // MARK: - Native notification behavior
@@ -813,13 +947,21 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         if felpfitIntent == "webUpdate" {
             let remoteVersion = (info["version"] as? String) ?? ""
             let signature = (info["signature"] as? String) ?? ""
+            let lifecycleKind = (info["lifecycleKind"] as? String) ?? ""
             DispatchQueue.main.async { [weak self] in
-                self?.updateCoordinator.requireUpdate(version: remoteVersion, signature: signature)
-                self?.pendingNotificationIntent = [
+                guard let self else { return }
+                if lifecycleKind == "success" {
+                    self.pendingNotificationIntent = nil
+                    return
+                }
+                if lifecycleKind.isEmpty {
+                    self.updateCoordinator.requireUpdate(version: remoteVersion, signature: signature)
+                }
+                self.pendingNotificationIntent = [
                     "kind": "webUpdate",
                     "remoteVersion": remoteVersion
                 ]
-                self?.applyPendingNotificationIntentIfPossible()
+                self.applyPendingNotificationIntentIfPossible()
             }
             completionHandler()
             return
@@ -855,18 +997,26 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             return
         }
 
-        if let calendarDate = intent["calendarDate"], !calendarDate.isEmpty {
-            navigateWebApp(queryItems: [URLQueryItem(name: "calendarDate", value: calendarDate)])
-            pendingNotificationIntent = nil
-            return
-        }
+        guard JSONSerialization.isValidJSONObject(intent),
+              let data = try? JSONSerialization.data(withJSONObject: intent),
+              let json = String(data: data, encoding: .utf8) else { return }
 
-        if let questionID = intent["questionID"], !questionID.isEmpty {
-            navigateWebApp(queryItems: [
-                URLQueryItem(name: "question", value: questionID),
-                URLQueryItem(name: "date", value: intent["dateKey"] ?? Self.todayKey())
-            ])
-            pendingNotificationIntent = nil
+        webView.evaluateJavaScript("window.__felpfitHandleNativeNotificationIntent?.(\(json))") { [weak self] result, _ in
+            guard let self else { return }
+            if (result as? Bool) == true {
+                self.pendingNotificationIntent = nil
+                return
+            }
+            if let calendarDate = intent["calendarDate"], !calendarDate.isEmpty {
+                self.navigateWebApp(queryItems: [URLQueryItem(name: "calendarDate", value: calendarDate)])
+                self.pendingNotificationIntent = nil
+            } else if let questionID = intent["questionID"], !questionID.isEmpty {
+                self.navigateWebApp(queryItems: [
+                    URLQueryItem(name: "question", value: questionID),
+                    URLQueryItem(name: "date", value: intent["dateKey"] ?? Self.todayKey())
+                ])
+                self.pendingNotificationIntent = nil
+            }
         }
     }
 
