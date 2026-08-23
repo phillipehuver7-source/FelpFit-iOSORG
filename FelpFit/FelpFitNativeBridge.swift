@@ -41,7 +41,7 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:144
+        nativeBuild:147
       };
       let items = [];
       let lastScheduleSignature = "";
@@ -358,8 +358,7 @@ struct FelpFitNativeBridge {
           .ff-native-section{border:1px solid var(--line);border-radius:18px;background:var(--panel2);overflow:hidden}.ff-native-section summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px}.ff-native-section summary::-webkit-details-marker{display:none}.ff-native-section summary span{display:grid;gap:3px}.ff-native-section summary small{color:var(--muted);font-size:10px;font-weight:600}.ff-native-section summary em{font-style:normal;font-size:10px;font-weight:900;padding:5px 7px;border:1px solid var(--line);border-radius:999px;color:var(--accent2)}
           .ff-native-list{display:grid;border-top:1px solid var(--line)}.ff-native-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px;border-bottom:1px solid rgba(255,255,255,.055);transition:.2s ease}.ff-native-row:last-child{border-bottom:0}.ff-native-row.off{opacity:.5}.ff-native-row-copy{min-width:0;display:grid;gap:3px}.ff-native-row-copy b{font-size:12px;line-height:1.35}.ff-native-row-copy span{font-size:10px;color:var(--accent2);font-weight:850}.ff-native-row-copy small{font-size:9px;color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ff-native-row-actions{display:flex;align-items:center;gap:6px;flex:none}.ff-switch,.ff-urgent{height:34px;border-radius:12px;border:1px solid var(--line);background:var(--panel3);color:var(--muted);font-weight:900}.ff-switch{min-width:48px;font-size:10px}.ff-switch.on{color:#a8f3cc;border-color:rgba(66,211,146,.38);background:rgba(66,211,146,.1)}.ff-urgent{width:38px;font-size:16px}.ff-urgent.on{border-color:rgba(255,115,96,.42);background:rgba(255,90,70,.11);box-shadow:0 0 24px rgba(255,90,70,.08)}.ff-urgent:disabled{opacity:.35}.ff-native-empty{padding:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
           .ff-native-toast{position:fixed;left:50%;bottom:max(24px,env(safe-area-inset-bottom));z-index:9999;transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:10px 13px;border:1px solid var(--line);border-radius:14px;background:#15151d;color:#fff;font-size:11px;font-weight:800;box-shadow:0 20px 60px rgba(0,0,0,.4);transition:.25s ease}.ff-native-toast.show{opacity:1;transform:translate(-50%,0)}
-          .ff-web-update{position:fixed;z-index:10020;left:12px;right:12px;top:max(12px,env(safe-area-inset-top));display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 13px 13px 15px;border:1px solid color-mix(in srgb,var(--accent) 48%,var(--line));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--panel) 94%,var(--accent) 6%),var(--panel3));box-shadow:0 20px 70px rgba(0,0,0,.5),0 0 32px color-mix(in srgb,var(--accent) 15%,transparent);animation:ffUpdateIn .32s cubic-bezier(.2,.8,.2,1) both;backdrop-filter:blur(18px)}.ff-web-update-copy{min-width:0;display:grid;gap:3px}.ff-web-update-copy b{font-size:12px}.ff-web-update-copy small{font-size:10px;color:var(--muted);line-height:1.4}.ff-web-update button{flex:none;border:0;border-radius:13px;padding:10px 12px;color:#fff;background:linear-gradient(135deg,var(--accent),#5d3fc4);font-size:10px;font-weight:950;box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 22%,transparent)}@keyframes ffUpdateIn{from{opacity:0;transform:translateY(-14px) scale(.97)}to{opacity:1;transform:none}}
-          @media(max-width:520px){#notificationModal .modal.ff-native-modal{max-height:92dvh}.ff-native-actions{grid-template-columns:1fr}.ff-native-head{padding:16px 15px 12px}.ff-native-body{padding:12px}.ff-native-row{align-items:flex-start}.ff-native-row-actions{padding-top:2px}.ff-web-update{left:9px;right:9px}}
+          @media(max-width:520px){#notificationModal .modal.ff-native-modal{max-height:92dvh}.ff-native-actions{grid-template-columns:1fr}.ff-native-head{padding:16px 15px 12px}.ff-native-body{padding:12px}.ff-native-row{align-items:flex-start}.ff-native-row-actions{padding-top:2px}}
         `;
         document.head.appendChild(style);
       }
@@ -371,25 +370,6 @@ struct FelpFitNativeBridge {
         node.classList.add("show");
         clearTimeout(window.__felpfitNativeToastTimer);
         window.__felpfitNativeToastTimer=setTimeout(()=>node.classList.remove("show"),2600);
-      }
-
-      function hideWebUpdateBanner(){
-        document.getElementById("felpfit-web-update")?.remove();
-      }
-
-      function showWebUpdateBanner(payload={}){
-        ensureStyle();
-        let node=document.getElementById("felpfit-web-update");
-        if(!node){
-          node=document.createElement("div");
-          node.id="felpfit-web-update";
-          node.className="ff-web-update";
-          document.body.appendChild(node);
-        }
-        const remote=String(payload.remoteVersion||"").trim();
-        const label=remote?`Versão ${remote} pronta`:`Nova versão online pronta`;
-        node.innerHTML=`<div class="ff-web-update-copy"><b>🚀 Atualização do FelpFit</b><small>${escapeHtml(label)}. Atualiza a interface sem trocar a IPA.</small></div><button type="button">ATUALIZAR</button>`;
-        node.querySelector("button")?.addEventListener("click",()=>postNative({command:"applyWebUpdate"}),{once:true});
       }
 
       function render(){
@@ -419,7 +399,6 @@ struct FelpFitNativeBridge {
             <div class="ff-native-actions">
               <button type="button" class="primary" data-native-permissions>Permitir alarmes + notificações</button>
               <button type="button" data-native-test>Testar em 30 segundos</button>
-              <button type="button" data-native-update-check>Buscar atualização</button>
             </div>
             <div class="ff-native-note"><strong>🚨 Urgente</strong> usa o AlarmKit do iPhone e pode romper Silencioso e Foco. Toque no 🚨 de uma missão para trocar por <strong>🔔 notificação normal</strong>. O botão ON/OFF desliga aquele aviso por completo.</div>
             ${fallback?`<div class="ff-native-note ff-native-warning">⚠️ ${fallback} alerta(s) urgente(s) estão usando notificação normal porque o AlarmKit ficou indisponível ou atingiu o limite do sistema. Missões têm prioridade sobre hidratação e calendário.</div>`:""}
@@ -433,7 +412,6 @@ struct FelpFitNativeBridge {
         modal.querySelector("[data-native-master]")?.addEventListener("click",()=>postNative({command:"toggleMaster",enabled:!(state.masterEnabled!==false)}));
         modal.querySelector("[data-native-permissions]")?.addEventListener("click",()=>postNative({command:"requestPermissions"}));
         modal.querySelector("[data-native-test]")?.addEventListener("click",()=>postNative({command:"testAlert"}));
-        modal.querySelector("[data-native-update-check]")?.addEventListener("click",()=>postNative({command:"checkWebUpdate"}));
         modal.querySelectorAll("[data-action][data-key]").forEach(button=>{
           button.addEventListener("click",()=>{
             const key=button.dataset.key;
@@ -462,8 +440,6 @@ struct FelpFitNativeBridge {
         if(payload.type==="webUpdate"){
           state.webUpdateAvailable=payload.available===true;
           state.remoteWebVersion=String(payload.remoteVersion||state.remoteWebVersion||"");
-          if(payload.available===true) showWebUpdateBanner(payload);
-          else hideWebUpdateBanner();
         }
         if(payload.message) toast(payload.message);
         if(!document.getElementById("notificationModal")?.classList.contains("hidden")) render();
@@ -490,19 +466,15 @@ struct FelpFitNativeBridge {
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
         engineVersion:"1.0",
-        nativeBuild:144,
+        nativeBuild:147,
         capabilities:["alerts-v1","alarmkit-v1","web-update-v1","remote-alert-sync-v1"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),
         getState:()=>postNative({command:"getState"}),
         requestPermissions:()=>postNative({command:"requestPermissions"}),
         testAlert:()=>postNative({command:"testAlert"}),
-        checkForUpdate:()=>postNative({command:"checkWebUpdate"}),
-        applyUpdate:()=>postNative({command:"applyWebUpdate"})
+        checkForUpdate:()=>postNative({command:"checkWebUpdate"})
       });
-
-      window.__felpfitNativeWebUpdateAvailable = showWebUpdateBanner;
-      window.__felpfitNativeWebUpdateApplied = hideWebUpdateBanner;
 
       // Old PWA push is intentionally not used inside the real iOS app.
       window.enablePushNotifications = () => window.openNotificationSettings();

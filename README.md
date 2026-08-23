@@ -13,5 +13,5 @@ Este projeto é o shell iOS do FelpFit.
 ## Build atual
 
 - Marketing: 1.5.0
-- Build nativo: 146
+- Build nativo: 147
 - URL de produção: `https://felpfit.pages.dev/`
