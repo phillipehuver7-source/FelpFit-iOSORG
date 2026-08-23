@@ -1,0 +1,112 @@
+name: FelpFit Recover Current Cloudflare Runtime
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/felpfit-cloudflare-recover-current.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PROJECT_NAME: felpfit
+      DEPLOYMENT_ID: 2af97890-6ca8-4aca-940b-4622fcbe3432
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read current Cloudflare Pages metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/felpfit-current"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          API="https://api.cloudflare.com/client/v4"
+          AUTH="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+
+          curl -fsS -H "$AUTH" \
+            "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}" \
+            > "$OUT/project.raw.json"
+          curl -fsS -H "$AUTH" \
+            "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}/deployments/${DEPLOYMENT_ID}" \
+            > "$OUT/deployment.raw.json"
+
+          jq -e '.success == true' "$OUT/project.raw.json" >/dev/null
+          jq -e '.success == true' "$OUT/deployment.raw.json" >/dev/null
+
+          DEPLOY_SCRIPT="$(jq -r '.result.source.config.production_script_name // empty' "$OUT/deployment.raw.json")"
+          PROJECT_SCRIPT="$(jq -r '.result.source.config.production_script_name // empty' "$OUT/project.raw.json")"
+          SCRIPT_NAME="${DEPLOY_SCRIPT:-$PROJECT_SCRIPT}"
+
+          jq -n \
+            --arg deployment_id "$(jq -r '.result.id // ""' "$OUT/deployment.raw.json")" \
+            --arg short_id "$(jq -r '.result.short_id // ""' "$OUT/deployment.raw.json")" \
+            --arg environment "$(jq -r '.result.environment // ""' "$OUT/deployment.raw.json")" \
+            --arg source_type "$(jq -r '.result.source.type // ""' "$OUT/deployment.raw.json")" \
+            --arg script "$SCRIPT_NAME" \
+            --arg project_script "$PROJECT_SCRIPT" \
+            --arg uses_functions "$(jq -r '.result.source.config.uses_functions // .result.uses_functions // ""' "$OUT/deployment.raw.json")" \
+            --arg created_on "$(jq -r '.result.created_on // ""' "$OUT/deployment.raw.json")" \
+            --arg modified_on "$(jq -r '.result.modified_on // ""' "$OUT/deployment.raw.json")" \
+            '{deployment_id:$deployment_id,short_id:$short_id,environment:$environment,source_type:$source_type,production_script_name:$script,project_production_script_name:$project_script,uses_functions:$uses_functions,created_on:$created_on,modified_on:$modified_on}' \
+            > "$OUT/metadata.json"
+
+          rm -f "$OUT/project.raw.json" "$OUT/deployment.raw.json"
+
+          if [ -n "$SCRIPT_NAME" ]; then
+            ENCODED_SCRIPT="$(python3 - "$SCRIPT_NAME" <<'PY'
+import sys, urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe=''))
+PY
+)"
+            STATUS="$(curl -sS -o "$OUT/current-pages-worker.bin" -w '%{http_code}' -H "$AUTH" "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${ENCODED_SCRIPT}/content")"
+            printf '%s\n' "$STATUS" > "$OUT/current-pages-worker.http-status"
+            if [ "$STATUS" = "200" ]; then
+              sha256sum "$OUT/current-pages-worker.bin" > "$OUT/current-pages-worker.sha256"
+              wc -c "$OUT/current-pages-worker.bin" > "$OUT/current-pages-worker.bytes"
+            else
+              rm -f "$OUT/current-pages-worker.bin"
+            fi
+          else
+            printf '%s\n' 'no-script-name' > "$OUT/current-pages-worker.http-status"
+          fi
+
+          STATUS="$(curl -sS -o "$OUT/workers-list.raw.json" -w '%{http_code}' -H "$AUTH" "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts")"
+          if [ "$STATUS" = "200" ] && jq -e '.success == true' "$OUT/workers-list.raw.json" >/dev/null 2>&1; then
+            jq '[.result[] | {id:(.id // .name // ""), modified_on:(.modified_on // "")} | select((.id|ascii_downcase|contains("felp")) or (.id|ascii_downcase|contains("page")))]' "$OUT/workers-list.raw.json" > "$OUT/related-worker-names.json"
+          fi
+          rm -f "$OUT/workers-list.raw.json"
+
+          echo 'Recovered metadata:'
+          cat "$OUT/metadata.json"
+
+      - name: Save recovery only to isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/felpfit-current"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin felpfit-pages-v2-preflight
+          git switch felpfit-pages-v2-preflight
+          rm -rf cloudflare-source/recovered
+          mkdir -p cloudflare-source/recovered
+          cp -a "$OUT"/. cloudflare-source/recovered/
+          git add cloudflare-source/recovered
+          if git diff --cached --quiet; then
+            echo 'No recovery changes.'
+          else
+            git commit -m "Recover exact current Cloudflare runtime [skip ci]"
+            git push origin HEAD:felpfit-pages-v2-preflight
+          fi
