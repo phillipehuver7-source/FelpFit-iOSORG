@@ -27,11 +27,12 @@ final class FelpFitPushCoordinator {
 
     func configure(application: UIApplication) {
         registerNotificationCategories()
-        application.registerForRemoteNotifications()
+        // A distribuição atual usa notificações locais do próprio iOS.
+        // Não registra APNs sem provedor configurado.
     }
 
     func retryRegistration(application: UIApplication = .shared) {
-        application.registerForRemoteNotifications()
+        registerNotificationCategories()
     }
 
     func didRegister(deviceToken data: Data) {
@@ -69,7 +70,7 @@ final class FelpFitPushCoordinator {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         var result: [String: Any] = [
             "type": "remotePush",
-            "supported": true,
+            "supported": false,
             "registeredWithAPNs": token != nil,
             "deviceToken": token ?? "",
             "environment": Self.apnsEnvironment(),
@@ -77,6 +78,7 @@ final class FelpFitPushCoordinator {
             "nativeBuild": build,
             "nativeVersion": version
         ]
+        result["message"] = "Avisos de rotina usam notificações locais nativas."
 
         if let error = defaults.string(forKey: DefaultsKey.lastRegistrationError), !error.isEmpty {
             result["registrationError"] = error

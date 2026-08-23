@@ -41,7 +41,7 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:149,
+        nativeBuild:150,
         verifiedPendingNotificationCount:0,
         scheduleErrors:[],
         remotePushSupported:true,
@@ -95,7 +95,7 @@ struct FelpFitNativeBridge {
               token,
               environment:String(payload.environment||state.environment||"production"),
               bundleIdentifier:String(payload.bundleIdentifier||state.bundleIdentifier||"app.felpfit.ios"),
-              nativeBuild:String(payload.nativeBuild||state.nativeBuild||149),
+              nativeBuild:String(payload.nativeBuild||state.nativeBuild||150),
               nativeVersion:String(payload.nativeVersion||state.nativeVersion||"1.5.0"),
               webVersion:currentWebVersion()
             })
@@ -431,7 +431,7 @@ struct FelpFitNativeBridge {
             <div class="ff-native-status">
               <span class="ff-native-chip ${statusClass(state.alarmStatus)}">🚨 ${statusText(state.alarmStatus,"alarm")}</span>
               <span class="ff-native-chip ${statusClass(state.notificationStatus)}">🔔 ${statusText(state.notificationStatus,"notification")}</span>
-              <span class="ff-native-chip ${state.remotePushRegistered&&state.remotePushProviderConfigured?"ok":"wait"}">📡 ${state.remotePushRegistered?(state.remotePushProviderConfigured?"Push remoto pronto":"Push aguardando Apple"):"Push remoto aguardando"}</span>
+              <span class="ff-native-chip ok">📱 Canal local nativo — abre o FelpFit</span>
             </div>
           </div>
           <div class="ff-native-body">
@@ -454,7 +454,11 @@ struct FelpFitNativeBridge {
 
         modal.querySelector("[data-native-close]")?.addEventListener("click",()=>overlay.classList.add("hidden"));
         modal.querySelector("[data-native-master]")?.addEventListener("click",()=>postNative({command:"toggleMaster",enabled:!(state.masterEnabled!==false)}));
-        modal.querySelector("[data-native-permissions]")?.addEventListener("click",()=>postNative({command:"requestPermissions"}));
+        modal.querySelector("[data-native-permissions]")?.addEventListener("click",()=>postNative({
+          command:state.notificationStatus==="denied"||state.alarmStatus==="denied"
+            ?"openNotificationSettings"
+            :"requestPermissions"
+        }));
         modal.querySelector("[data-native-test]")?.addEventListener("click",()=>postNative({command:"testAlert"}));
         modal.querySelectorAll("[data-action][data-key]").forEach(button=>{
           button.addEventListener("click",()=>{
@@ -511,7 +515,7 @@ struct FelpFitNativeBridge {
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
         engineVersion:"2.0",
-        nativeBuild:149,
+        nativeBuild:150,
         capabilities:["alerts-v2","alarmkit-v1","paired-alerts-v1","deep-links-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),

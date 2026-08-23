@@ -67,6 +67,7 @@ struct FelpFitAlarmMetadata: AlarmMetadata {
 
 final class FelpFitAlertCoordinator {
     static let shared = FelpFitAlertCoordinator()
+    private static let testNotificationPrefix = "felpfit.native.test."
 
     private enum DefaultsKey {
         static let masterEnabled = "felpfit.nativeAlerts.masterEnabled.v1"
@@ -223,6 +224,7 @@ final class FelpFitAlertCoordinator {
             do {
                 let refreshedSettings = await notificationCenter.notificationSettings()
                 var notificationScheduled = false
+                var verifiedPending = false
                 if canUseNotifications(refreshedSettings.authorizationStatus) {
                     let content = UNMutableNotificationContent()
                     content.title = "FelpFit • teste combinado"
@@ -230,17 +232,21 @@ final class FelpFitAlertCoordinator {
                     content.sound = .default
                     content.categoryIdentifier = "FELPFIT_REMINDER"
                     let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 20, repeats: false)
-                    let request = UNNotificationRequest(identifier: "felpfit.native.test", content: content, trigger: trigger)
+                    let identifier = Self.testNotificationPrefix + UUID().uuidString
+                    let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
                     do {
                         try await notificationCenter.add(request)
                         notificationScheduled = true
+                        verifiedPending = await notificationCenter.pendingNotificationRequests().contains {
+                            $0.identifier == identifier
+                        }
                     } catch {
                         lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
                     }
                 }
                 try await scheduleAlarmKit(test, explicitID: testAlarmID())
-                return await stateDictionary(message: notificationScheduled
-                    ? "Teste combinado: notificação em 20 segundos e alarme 10 segundos depois."
+                return await stateDictionary(message: notificationScheduled && verifiedPending
+                    ? "Teste confirmado pelo iPhone: notificação em 20 segundos e alarme 10 segundos depois."
                     : "Teste urgente agendado para daqui a 30 segundos; notificações normais não estão autorizadas.")
             } catch {
                 // If AlarmKit cannot schedule, fall through to regular notification.
@@ -256,10 +262,16 @@ final class FelpFitAlertCoordinator {
             content.sound = .default
             content.categoryIdentifier = "FELPFIT_REMINDER"
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 30, repeats: false)
-            let request = UNNotificationRequest(identifier: "felpfit.native.test", content: content, trigger: trigger)
+            let identifier = Self.testNotificationPrefix + UUID().uuidString
+            let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
             do {
                 try await notificationCenter.add(request)
-                return await stateDictionary(message: "Teste de notificação confirmado para daqui a 30 segundos.")
+                let verified = await notificationCenter.pendingNotificationRequests().contains {
+                    $0.identifier == identifier
+                }
+                return await stateDictionary(message: verified
+                    ? "Teste de notificação confirmado pelo iPhone para daqui a 30 segundos."
+                    : "O iPhone aceitou o pedido, mas ele não apareceu na fila de notificações.")
             } catch {
                 lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
                 return await stateDictionary(message: "O iPhone recusou o teste de notificação: \(error.localizedDescription)")
@@ -290,7 +302,7 @@ final class FelpFitAlertCoordinator {
         let managedIdentifiers = pendingRequests
             .map(\.identifier)
             .filter { identifier in
-                identifier.hasPrefix("felpfit.native.") && identifier != "felpfit.native.test"
+                identifier.hasPrefix("felpfit.native.") && !identifier.hasPrefix(Self.testNotificationPrefix)
             }
         notificationCenter.removePendingNotificationRequests(withIdentifiers: managedIdentifiers)
         cancelKnownAlarmKitAlarms()
@@ -341,7 +353,7 @@ final class FelpFitAlertCoordinator {
     }
 
     private func pendingNotificationIdentifiers() -> [String] {
-        currentItems.map { notificationIdentifier(for: $0.key) } + ["felpfit.native.test"]
+        currentItems.map { notificationIdentifier(for: $0.key) }
     }
 
     private func notificationIdentifier(for key: String) -> String {
@@ -502,7 +514,7 @@ final class FelpFitAlertCoordinator {
         let alarmStatus = alarmAuthorizationStatus()
         let pendingRequests = await notificationCenter.pendingNotificationRequests()
         let pendingManaged = pendingRequests.filter {
-            $0.identifier.hasPrefix("felpfit.native.") && $0.identifier != "felpfit.native.test"
+            $0.identifier.hasPrefix("felpfit.native.") && !$0.identifier.hasPrefix(Self.testNotificationPrefix)
         }
         var prefs: [String: [String: Bool]] = [:]
         for item in currentItems {

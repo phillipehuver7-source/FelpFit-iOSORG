@@ -64,32 +64,36 @@ final class FelpFitUpdateCoordinator {
         return true
     }
 
-    /// Retorna a atualização concluída somente quando havia aplicação solicitada.
+    /// Confirma a versão realmente carregada. Se ela já for exatamente a versão
+    /// remota pendente, a pendência terminou mesmo quando a WebView chegou nessa
+    /// versão antes do toque em "Atualizar". O clique nunca prova o sucesso.
     @discardableResult
     func confirmLoaded(version rawVersion: String) -> PendingUpdate? {
         guard let version = normalizedVersion(rawVersion) else { return nil }
         defaults.set(version, forKey: Key.loadedVersion)
 
-        guard
-            let pending = pendingUpdate,
-            pending.applyRequested,
-            compareVersions(version, pending.version) == .orderedSame
-        else {
+        guard let pending = pendingUpdate,
+              compareVersions(version, pending.version) == .orderedSame else {
             if pendingUpdate == nil {
                 defaults.set(version, forKey: Key.appliedVersion)
             }
             return nil
         }
 
+        let shouldPresentCompletion = pending.applyRequested
         defaults.set(version, forKey: Key.appliedVersion)
         defaults.removeObject(forKey: Key.pendingVersion)
         defaults.removeObject(forKey: Key.pendingSignature)
         defaults.removeObject(forKey: Key.applyRequested)
-        return pending
+        return shouldPresentCompletion ? pending : nil
     }
 
     func shouldNotify(version rawVersion: String) -> Bool {
         guard let version = normalizedVersion(rawVersion) else { return false }
+        if let loaded = normalizedVersion(defaults.string(forKey: Key.loadedVersion)),
+           compareVersions(version, loaded) != .orderedDescending {
+            return false
+        }
         return defaults.string(forKey: Key.lastNotificationVersion) != version
     }
 

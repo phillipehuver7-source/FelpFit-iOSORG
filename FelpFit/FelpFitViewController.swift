@@ -6,7 +6,7 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
-    private static let nativeBuild = 149
+    private static let nativeBuild = 150
     private static let updateNotificationPrefix = "felpfit.webupdate."
 
     private let updateCoordinator = FelpFitUpdateCoordinator.shared
@@ -694,6 +694,14 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
             case "requestPermissions":
                 payload = await FelpFitAlertCoordinator.shared.requestPermissions()
+
+            case "openNotificationSettings":
+                await MainActor.run {
+                    guard let settingsURL = URL(string: UIApplication.openSettingsURLString),
+                          UIApplication.shared.canOpenURL(settingsURL) else { return }
+                    UIApplication.shared.open(settingsURL)
+                }
+                payload = await FelpFitAlertCoordinator.shared.getState()
 
             case "toggleMaster":
                 payload = await FelpFitAlertCoordinator.shared.setMasterEnabled((body["enabled"] as? Bool) ?? true)
