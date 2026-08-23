@@ -418,7 +418,24 @@ final class FelpFitAlertCoordinator {
 
         let id = explicitID ?? alarmID(for: item.key)
         let alertTitle = LocalizedStringResource(stringLiteral: item.title)
-        let alert = AlarmPresentation.Alert(title: alertTitle)
+        let alert: AlarmPresentation.Alert
+        if #available(iOS 26.1, *) {
+            // iOS 26.1+ supplies the Stop control automatically.
+            alert = AlarmPresentation.Alert(title: alertTitle)
+        } else {
+            // iOS 26.0 requires the original explicit Stop button initializer.
+            let stopButton = AlarmButton(
+                text: LocalizedStringResource(stringLiteral: "Parar"),
+                textColor: .white,
+                systemImageName: "stop.circle"
+            )
+            alert = AlarmPresentation.Alert(
+                title: alertTitle,
+                stopButton: stopButton,
+                secondaryButton: nil,
+                secondaryButtonBehavior: nil
+            )
+        }
         let metadata = FelpFitAlarmMetadata(
             key: item.key,
             questionID: item.questionID,
