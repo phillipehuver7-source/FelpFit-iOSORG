@@ -248,7 +248,16 @@ final class FelpFitAlertCoordinator {
         lastScheduledAlarmCount = 0
         lastScheduledNotificationCount = 0
 
-        notificationCenter.removeAllPendingNotificationRequests()
+        // Remove somente os lembretes gerenciados pela agenda. Notificações de
+        // update e o teste de 30 segundos pertencem a fluxos independentes e
+        // não podem ser cancelados por uma sincronização automática.
+        let pendingRequests = await notificationCenter.pendingNotificationRequests()
+        let managedIdentifiers = pendingRequests
+            .map(\.identifier)
+            .filter { identifier in
+                identifier.hasPrefix("felpfit.native.") && identifier != "felpfit.native.test"
+            }
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: managedIdentifiers)
         cancelKnownAlarmKitAlarms()
 
         guard masterEnabled else {

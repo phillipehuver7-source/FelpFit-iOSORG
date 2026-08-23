@@ -41,7 +41,7 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:146
+        nativeBuild:147
       };
       let items = [];
       let lastScheduleSignature = "";
@@ -466,7 +466,7 @@ struct FelpFitNativeBridge {
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
         engineVersion:"1.0",
-        nativeBuild:146,
+        nativeBuild:147,
         capabilities:["alerts-v1","alarmkit-v1","web-update-v1","remote-alert-sync-v1"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),

@@ -6,7 +6,7 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
-    private static let nativeBuild = 146
+    private static let nativeBuild = 147
     private static let updateNotificationPrefix = "felpfit.webupdate."
 
     private let updateCoordinator = FelpFitUpdateCoordinator.shared
@@ -264,7 +264,12 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
     private func scheduleWebUpdateNotificationIfNeeded(_ snapshot: RemoteWebSnapshot) async {
         guard updateCoordinator.shouldNotify(version: snapshot.version) else { return }
 
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let notificationCenter = UNUserNotificationCenter.current()
+        var settings = await notificationCenter.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
+            settings = await notificationCenter.notificationSettings()
+        }
         guard canUseNotifications(settings.authorizationStatus) else { return }
 
         let versionLabel = snapshot.version.isEmpty ? "nova versão" : snapshot.version
@@ -294,7 +299,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
 
         do {
-            try await UNUserNotificationCenter.current().add(request)
+            try await notificationCenter.add(request)
             updateCoordinator.markNotificationScheduled(version: snapshot.version)
         } catch {
             // A interface continua mostrando o update mesmo se o iOS recusar a notificação.
