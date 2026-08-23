@@ -6,6 +6,15 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
+    private static let nativeBuild = 146
+    private static let updateNotificationPrefix = "felpfit.webupdate."
+    private static let nativeVersionNotificationIdentifier = "felpfit.native.version.update"
+
+    private enum UpdateDefaults {
+        static let lastWebUpdateNotificationToken = "felpfit.webUpdate.lastNotificationToken.v1"
+        static let lastNativeVersionNotification = "felpfit.nativeVersion.lastNotification.v1"
+        static let lastReleaseNotesSeenVersion = "felpfit.releaseNotes.lastSeen.v1"
+    }
 
     private var pendingNotificationIntent: [String: String]?
     private var didOfferNativePermissions = false
@@ -14,6 +23,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
     private var webUpdateTimer: Timer?
     private var webUpdateCheckTask: Task<Void, Never>?
     private var isApplyingWebUpdate = false
+    private var alertSyncBlockedUntil: Date?
 
     private lazy var webView: WKWebView = {
         let configuration = WKWebViewConfiguration()
@@ -27,6 +37,11 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         controller.add(WeakScriptMessageHandler(self), name: Self.bridgeName)
         controller.addUserScript(WKUserScript(
             source: FelpFitNativeBridge.script,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        ))
+        controller.addUserScript(WKUserScript(
+            source: FelpFitUpdateExperience.script,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true
         ))
@@ -63,6 +78,12 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
 
         loadFelpFit()
     }
@@ -76,6 +97,10 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
     override var prefersStatusBarHidden: Bool { true }
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+
+    private var nativeMarketingVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.5.0"
+    }
 
     private func loadFelpFit(forceRefresh: Bool = false) {
         var url = Self.appURL
@@ -95,8 +120,23 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
     }
 
     @objc private func applicationDidBecomeActive() {
+        Task { [weak self] in
+            await self?.scheduleNativeVersionNotificationIfNeeded()
+        }
+
         guard webView.url != nil else { return }
-        webView.evaluateJavaScript("window.__felpfitNativeSync && window.__felpfitNativeSync();")
+
+        if alertSyncBlockedUntil.map({ Date() >= $0 }) ?? true {
+            webView.evaluateJavaScript("window.__felpfitNativeSync && window.__felpfitNativeSync();")
+        }
+
+        webUpdateCheckTask?.cancel()
+        webUpdateCheckTask = Task { [weak self] in
+            _ = await self?.checkForWebUpdate(showCurrentMessage: false)
+        }
+    }
+
+    @objc private func applicationDidEnterBackground() {
         webUpdateCheckTask?.cancel()
         webUpdateCheckTask = Task { [weak self] in
             _ = await self?.checkForWebUpdate(showCurrentMessage: false)
@@ -123,6 +163,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         do {
             let snapshot = try await fetchRemoteWebSnapshot()
             if !loadedWebAppVersion.isEmpty, !snapshot.version.isEmpty, isVersion(snapshot.version, newerThan: loadedWebAppVersion) {
+                await scheduleWebUpdateNotificationIfNeeded(snapshot)
                 await MainActor.run { [weak self] in
                     self?.sendPayloadToWeb([
                         "type": "webUpdate",
@@ -162,9 +203,13 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                 "remoteVersion": snapshot.version,
                 "currentVersion": loadedWebAppVersion
             ]
-            if !available && showCurrentMessage {
+
+            if available {
+                await scheduleWebUpdateNotificationIfNeeded(snapshot)
+            } else if showCurrentMessage {
                 result["message"] = "FelpFit já está na versão mais recente."
             }
+
             await MainActor.run { [weak self] in self?.sendPayloadToWeb(result) }
             return result
         } catch {
@@ -228,12 +273,110 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         return false
     }
 
+    private func canUseNotifications(_ status: UNAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func shortDigest(_ value: String) -> String {
+        let digest = SHA256.hash(data: Data(value.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func scheduleWebUpdateNotificationIfNeeded(_ snapshot: RemoteWebSnapshot) async {
+        let token = "\(snapshot.version)|\(snapshot.signature)"
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: UpdateDefaults.lastWebUpdateNotificationToken) != token else { return }
+
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard canUseNotifications(settings.authorizationStatus) else { return }
+
+        let versionLabel = snapshot.version.isEmpty ? "nova versão" : snapshot.version
+        let messages: [(String, String)] = [
+            ("🚀 FelpFit \(versionLabel) chegou", "Tem novidade pronta. Toque para ver o que mudou e atualizar."),
+            ("💜 Atualização nova no FelpFit", "A versão \(versionLabel) já está disponível. Toque para abrir o update."),
+            ("⚡ FelpFit ficou melhor", "Tem uma atualização esperando por você. Veja as novidades e atualize."),
+            ("🔔 Nova versão disponível", "Seu FelpFit tem update novo. Toque para abrir a atualização."),
+            ("🏆 Update \(versionLabel) pronto", "Alertas, progresso e experiência receberam melhorias. Toque para ver."),
+            ("✨ Tem novidade no FelpFit", "Uma versão nova acabou de chegar. Toque para descobrir o que mudou.")
+        ]
+        let index = Int(Self.shortDigest(token).prefix(2), radix: 16).map { $0 % messages.count } ?? 0
+        let selected = messages[index]
+
+        let content = UNMutableNotificationContent()
+        content.title = selected.0
+        content.body = selected.1
+        content.sound = .default
+        content.userInfo = [
+            "felpfitIntent": "webUpdate",
+            "remoteVersion": snapshot.version,
+            "signature": snapshot.signature
+        ]
+
+        let identifier = Self.updateNotificationPrefix + Self.shortDigest(token)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1.0, repeats: false)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            defaults.set(token, forKey: UpdateDefaults.lastWebUpdateNotificationToken)
+        } catch {
+            // A interface continua mostrando o update mesmo se o iOS recusar a notificação.
+        }
+    }
+
+    private func scheduleNativeVersionNotificationIfNeeded() async {
+        let defaults = UserDefaults.standard
+        let version = nativeMarketingVersion
+        guard defaults.string(forKey: UpdateDefaults.lastNativeVersionNotification) != version else { return }
+
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard canUseNotifications(settings.authorizationStatus) else { return }
+
+        let messages: [(String, String)] = [
+            ("✅ FelpFit \(version) instalado", "A nova versão já está no seu iPhone. Toque para ver as novidades."),
+            ("💜 FelpFit atualizado", "Versão \(version) pronta. Toque para conhecer o que mudou."),
+            ("⚡ Update concluído", "O FelpFit \(version) já está rodando. Veja as novidades da versão."),
+            ("✨ Versão nova no iPhone", "FelpFit \(version) instalado com sucesso. Toque para abrir.")
+        ]
+        let token = "native|\(version)"
+        let index = Int(Self.shortDigest(token).prefix(2), radix: 16).map { $0 % messages.count } ?? 0
+        let selected = messages[index]
+
+        let content = UNMutableNotificationContent()
+        content.title = selected.0
+        content.body = selected.1
+        content.sound = .default
+        content.userInfo = [
+            "felpfitIntent": "releaseNotes",
+            "remoteVersion": version,
+            "alreadyUpdated": "true"
+        ]
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1.5, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: Self.nativeVersionNotificationIdentifier,
+            content: content,
+            trigger: trigger
+        )
+
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            defaults.set(version, forKey: UpdateDefaults.lastNativeVersionNotification)
+        } catch {
+            // Tenta de novo numa próxima ativação caso o iOS ainda não tenha autorizado notificações.
+        }
+    }
+
     private func performWebUpdate() {
         guard !isApplyingWebUpdate else { return }
         isApplyingWebUpdate = true
         sendPayloadToWeb(["type": "webUpdate", "available": false, "updating": true, "message": "Atualizando o FelpFit…"])
 
-        // Limpa somente caches. Cookies, login, localStorage e dados do usuário permanecem intactos.
         let cleanupScript = """
         try {
           if (window.caches) { caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))); }
@@ -289,6 +432,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         alert.addAction(UIAlertAction(title: "Ativar", style: .default) { [weak self] _ in
             Task {
                 let payload = await FelpFitAlertCoordinator.shared.requestPermissions()
+                await self?.scheduleNativeVersionNotificationIfNeeded()
                 await MainActor.run {
                     self?.sendPayloadToWeb(payload)
                     self?.webView.evaluateJavaScript("window.__felpfitNativeSync && window.__felpfitNativeSync();")
@@ -302,6 +446,10 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         webView.evaluateJavaScript("window.__felpfitNativeKick && window.__felpfitNativeKick();")
         applyPendingNotificationIntentIfPossible()
         startWebUpdatePollingIfNeeded()
+
+        Task { [weak self] in
+            await self?.scheduleNativeVersionNotificationIfNeeded()
+        }
 
         webUpdateCheckTask?.cancel()
         webUpdateCheckTask = Task { [weak self] in
@@ -428,15 +576,21 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
             switch command {
             case "sync":
-                let rawItems = body["items"] as? [[String: Any]] ?? []
-                let force = (body["force"] as? Bool) ?? false
-                payload = await FelpFitAlertCoordinator.shared.sync(rawItems: rawItems, force: force)
+                if let blockedUntil = alertSyncBlockedUntil, Date() < blockedUntil {
+                    payload = await FelpFitAlertCoordinator.shared.getState()
+                } else {
+                    alertSyncBlockedUntil = nil
+                    let rawItems = body["items"] as? [[String: Any]] ?? []
+                    let force = (body["force"] as? Bool) ?? false
+                    payload = await FelpFitAlertCoordinator.shared.sync(rawItems: rawItems, force: force)
+                }
 
             case "getState":
                 payload = await FelpFitAlertCoordinator.shared.getState()
 
             case "requestPermissions":
                 payload = await FelpFitAlertCoordinator.shared.requestPermissions()
+                await scheduleNativeVersionNotificationIfNeeded()
 
             case "toggleMaster":
                 payload = await FelpFitAlertCoordinator.shared.setMasterEnabled((body["enabled"] as? Bool) ?? true)
@@ -450,25 +604,44 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                 payload = await FelpFitAlertCoordinator.shared.setUrgent(key: key, urgent: (body["urgent"] as? Bool) ?? true)
 
             case "testAlert":
+                alertSyncBlockedUntil = Date().addingTimeInterval(45)
                 payload = await FelpFitAlertCoordinator.shared.testAlert()
 
             case "webVersion":
                 let version = String(describing: body["version"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run { [weak self] in self?.loadedWebAppVersion = version }
-                payload = ["type": "webVersion", "version": version, "nativeBuild": 144]
+                payload = ["type": "webVersion", "version": version, "nativeBuild": Self.nativeBuild]
 
             case "checkWebUpdate":
                 payload = await checkForWebUpdate(showCurrentMessage: true)
 
             case "applyWebUpdate":
+                let version = String(describing: body["version"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !version.isEmpty {
+                    UserDefaults.standard.set(version, forKey: UpdateDefaults.lastReleaseNotesSeenVersion)
+                }
                 await MainActor.run { [weak self] in self?.performWebUpdate() }
                 payload = ["type": "webUpdate", "available": false, "updating": true]
+
+            case "markReleaseNotesSeen":
+                let version = String(describing: body["version"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !version.isEmpty {
+                    UserDefaults.standard.set(version, forKey: UpdateDefaults.lastReleaseNotesSeenVersion)
+                }
+                payload = ["type": "releaseNotesSeen", "version": version]
 
             case "getCapabilities":
                 payload = [
                     "type": "capabilities",
-                    "nativeBuild": 144,
-                    "capabilities": ["alerts-v1", "alarmkit-v1", "web-update-v1", "remote-alert-sync-v1"]
+                    "nativeBuild": Self.nativeBuild,
+                    "capabilities": [
+                        "alerts-v1",
+                        "alarmkit-v1",
+                        "web-update-v1",
+                        "remote-alert-sync-v1",
+                        "update-notifications-v1",
+                        "release-notes-v1"
+                    ]
                 ]
 
             default:
@@ -507,6 +680,34 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let info = response.notification.request.content.userInfo
+        let felpfitIntent = (info["felpfitIntent"] as? String) ?? ""
+
+        if felpfitIntent == "webUpdate" {
+            let remoteVersion = (info["remoteVersion"] as? String) ?? ""
+            DispatchQueue.main.async { [weak self] in
+                self?.pendingNotificationIntent = [
+                    "kind": "webUpdate",
+                    "remoteVersion": remoteVersion
+                ]
+                self?.applyPendingNotificationIntentIfPossible()
+            }
+            completionHandler()
+            return
+        }
+
+        if felpfitIntent == "releaseNotes" {
+            let remoteVersion = (info["remoteVersion"] as? String) ?? nativeMarketingVersion
+            DispatchQueue.main.async { [weak self] in
+                self?.pendingNotificationIntent = [
+                    "kind": "releaseNotes",
+                    "remoteVersion": remoteVersion
+                ]
+                self?.applyPendingNotificationIntentIfPossible()
+            }
+            completionHandler()
+            return
+        }
+
         let questionID = (info["questionID"] as? String) ?? ""
         let storedDateKey = (info["dateKey"] as? String) ?? ""
         let calendarDate = (info["calendarDate"] as? String) ?? ""
@@ -525,6 +726,30 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
     private func applyPendingNotificationIntentIfPossible() {
         guard let intent = pendingNotificationIntent, webView.url != nil else { return }
+
+        if intent["kind"] == "webUpdate" {
+            sendPayloadToWeb([
+                "type": "webUpdate",
+                "available": true,
+                "remoteVersion": intent["remoteVersion"] ?? "",
+                "currentVersion": loadedWebAppVersion,
+                "openedFromNotification": true,
+                "forceReleaseNotes": true
+            ])
+            pendingNotificationIntent = nil
+            return
+        }
+
+        if intent["kind"] == "releaseNotes" {
+            sendPayloadToWeb([
+                "type": "showReleaseNotes",
+                "version": intent["remoteVersion"] ?? nativeMarketingVersion,
+                "alreadyUpdated": true,
+                "openedFromNotification": true
+            ])
+            pendingNotificationIntent = nil
+            return
+        }
 
         if let calendarDate = intent["calendarDate"], !calendarDate.isEmpty {
             navigateWebApp(queryItems: [URLQueryItem(name: "calendarDate", value: calendarDate)])
