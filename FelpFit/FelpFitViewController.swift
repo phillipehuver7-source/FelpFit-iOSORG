@@ -301,11 +301,12 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         }
     }
 
-    private func performWebUpdate(targetVersion: String) {
-        guard !isApplyingWebUpdate else { return }
+    @discardableResult
+    private func performWebUpdate(targetVersion: String) -> Bool {
+        guard !isApplyingWebUpdate else { return true }
         guard updateCoordinator.beginApplying(version: targetVersion) else {
             presentPendingUpdateIfNeeded(error: "A versão solicitada mudou. Revise as novidades e tente novamente.")
-            return
+            return false
         }
 
         isApplyingWebUpdate = true
@@ -332,6 +333,7 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         ) { [weak self] _ in
             self?.reloadAfterCacheCleanup()
         }
+        return true
     }
 
     private func reloadAfterCacheCleanup() {
@@ -649,8 +651,12 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
 
             case "applyWebUpdate":
                 let version = String(describing: body["version"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                await MainActor.run { [weak self] in self?.performWebUpdate(targetVersion: version) }
-                payload = pendingUpdatePayload(updating: true)
+                let started = await MainActor.run { [weak self] in
+                    self?.performWebUpdate(targetVersion: version) ?? false
+                }
+                payload = started
+                    ? pendingUpdatePayload(updating: true)
+                    : pendingUpdatePayload(error: "A versão solicitada mudou. Tente novamente.")
 
             case "getCapabilities":
                 payload = [
