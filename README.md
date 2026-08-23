@@ -1,19 +1,16 @@
-# FelpFit para iOS
+# FelpFit iOS — motor nativo
 
-Aplicativo iOS do FelpFit usando uma `WKWebView` nativa em tela cheia.
+Este projeto é o shell iOS do FelpFit.
 
-## Fonte da interface
+- A interface é sempre carregada de `https://felpfit.pages.dev/`.
+- O IPA não contém cópia local da interface web.
+- Alterações visuais, missões, horários, calendário e regras publicadas no Cloudflare aparecem no app sem recompilar o IPA.
+- A camada Swift fornece recursos nativos como AlarmKit e notificações e recebe a agenda da interface online.
+- O motor inclui verificação de atualização da interface online e um botão **Atualizar** que limpa somente caches web, preservando sessão e dados locais.
+- Mudanças que adicionem uma capacidade iOS totalmente nova ainda exigem uma nova build nativa.
 
-O app carrega diretamente a produção oficial:
+## Build atual
 
-`https://felpfit.pages.dev/`
-
-Isso evita congelar uma cópia antiga do HTML dentro do IPA. As atualizações publicadas no Cloudflare Pages passam a aparecer no aplicativo sem precisar gerar um novo IPA para cada mudança visual/web.
-
-## Conta e dados
-
-A `WKWebView` usa armazenamento persistente (`WKWebsiteDataStore.default()`), e o site continua chamando as mesmas Pages Functions e o mesmo banco D1 configurados no projeto Cloudflare. Portanto o login feito dentro do aplicativo acessa a mesma conta e os mesmos dados do site.
-
-## Build
-
-Cada push na branch `main` executa **Build FelpFit IPA** e produz `FelpFit-unsigned.ipa`.
+- Marketing: 1.4.2
+- Build nativo: 144
+- URL de produção: `https://felpfit.pages.dev/`
