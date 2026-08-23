@@ -15,6 +15,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         window.makeKeyAndVisible()
         self.window = window
         FelpFitPushCoordinator.shared.configure(application: application)
+        if let url = launchOptions?[.url] as? URL, url.scheme?.lowercased() == "felpfit" {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .felpFitDeepLinkReceived,
+                    object: nil,
+                    userInfo: ["url": url]
+                )
+            }
+        }
         return true
     }
 
@@ -39,6 +48,20 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) {
         FelpFitPushCoordinator.shared.handleRemoteNotification(userInfo)
         completionHandler(.newData)
+    }
+
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        guard url.scheme?.lowercased() == "felpfit" else { return false }
+        NotificationCenter.default.post(
+            name: .felpFitDeepLinkReceived,
+            object: nil,
+            userInfo: ["url": url]
+        )
+        return true
     }
 }
 

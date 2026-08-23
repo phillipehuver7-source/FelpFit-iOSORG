@@ -5,6 +5,7 @@ import UserNotifications
 extension Notification.Name {
     static let felpFitRemotePushStateDidChange = Notification.Name("felpfit.remotePush.stateDidChange")
     static let felpFitRemoteNotificationReceived = Notification.Name("felpfit.remotePush.received")
+    static let felpFitDeepLinkReceived = Notification.Name("felpfit.deepLink.received")
 }
 
 /// Owns the APNs registration lifecycle. Delivery to the FelpFit backend is

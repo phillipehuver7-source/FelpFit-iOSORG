@@ -6,7 +6,7 @@ struct FelpFitUpdateExperience {
       if (window.__felpfitUpdateExperience150Installed) return;
       window.__felpfitUpdateExperience150Installed = true;
 
-      const NATIVE_BUILD = 148;
+      const NATIVE_BUILD = 149;
       let activePayload = null;
       let activeStep = 0;
       let rememberedSections = [];

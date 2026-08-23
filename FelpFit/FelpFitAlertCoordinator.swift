@@ -73,7 +73,7 @@ final class FelpFitAlertCoordinator {
         static let enabledByKey = "felpfit.nativeAlerts.enabledByKey.v1"
         static let urgentByKey = "felpfit.nativeAlerts.urgentByKey.v1"
         static let alarmIDs = "felpfit.nativeAlerts.alarmIDs.v1"
-        static let scheduleFingerprint = "felpfit.nativeAlerts.scheduleFingerprint.v2"
+        static let scheduleFingerprint = "felpfit.nativeAlerts.scheduleFingerprint.v3"
         static let explanationShown = "felpfit.nativeAlerts.explanationShown.v1"
         static let currentItems = "felpfit.nativeAlerts.currentItems.v2"
     }
@@ -192,7 +192,7 @@ final class FelpFitAlertCoordinator {
         urgentByKey = values
         defaults.removeObject(forKey: DefaultsKey.scheduleFingerprint)
         await rescheduleAll(force: true)
-        return await stateDictionary(message: urgent ? "Modo urgente ativado para esta missão." : "Esta missão agora usa notificação normal.")
+        return await stateDictionary(message: urgent ? "Alarme ativado; a notificação continua como abertura rápida." : "Este aviso agora usa somente notificação normal.")
     }
 
     func testAlert() async -> [String: Any] {
@@ -221,8 +221,27 @@ final class FelpFitAlertCoordinator {
                 category: "test"
             )
             do {
+                let refreshedSettings = await notificationCenter.notificationSettings()
+                var notificationScheduled = false
+                if canUseNotifications(refreshedSettings.authorizationStatus) {
+                    let content = UNMutableNotificationContent()
+                    content.title = "FelpFit • teste combinado"
+                    content.body = "A notificação chegou primeiro. O alarme tocará em 10 segundos."
+                    content.sound = .default
+                    content.categoryIdentifier = "FELPFIT_REMINDER"
+                    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 20, repeats: false)
+                    let request = UNNotificationRequest(identifier: "felpfit.native.test", content: content, trigger: trigger)
+                    do {
+                        try await notificationCenter.add(request)
+                        notificationScheduled = true
+                    } catch {
+                        lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
+                    }
+                }
                 try await scheduleAlarmKit(test, explicitID: testAlarmID())
-                return await stateDictionary(message: "Teste urgente agendado para daqui a 30 segundos.")
+                return await stateDictionary(message: notificationScheduled
+                    ? "Teste combinado: notificação em 20 segundos e alarme 10 segundos depois."
+                    : "Teste urgente agendado para daqui a 30 segundos; notificações normais não estão autorizadas.")
             } catch {
                 // If AlarmKit cannot schedule, fall through to regular notification.
             }
@@ -305,9 +324,12 @@ final class FelpFitAlertCoordinator {
                 }
                 #endif
 
-                if !didScheduleUrgent, canUseNotifications(notificationSettings.authorizationStatus) {
-                    let count = await scheduleLocalNotification(item)
-                    if count > 0 { lastFallbackCount += 1 }
+                if canUseNotifications(notificationSettings.authorizationStatus) {
+                    // Quando o AlarmKit estiver ativo, a notificação chega dez
+                    // segundos antes e serve como atalho para a tarefa. Se o
+                    // alarme não puder ser criado, o aviso fica no horário exato.
+                    let count = await scheduleLocalNotification(item, leadSeconds: didScheduleUrgent ? 10 : 0)
+                    if !didScheduleUrgent, count > 0 { lastFallbackCount += 1 }
                     lastScheduledNotificationCount += count
                 }
             } else if canUseNotifications(notificationSettings.authorizationStatus) {
@@ -327,7 +349,7 @@ final class FelpFitAlertCoordinator {
     }
 
     @discardableResult
-    private func scheduleLocalNotification(_ item: FelpFitScheduleItem) async -> Int {
+    private func scheduleLocalNotification(_ item: FelpFitScheduleItem, leadSeconds: Int = 0) async -> Int {
         let makeContent: () -> UNMutableNotificationContent = {
             let content = UNMutableNotificationContent()
             content.title = item.title
@@ -338,6 +360,7 @@ final class FelpFitAlertCoordinator {
                 : "FELPFIT_REMINDER"
             content.threadIdentifier = "felpfit.\(item.category)"
             content.userInfo = [
+                "scheduleKey": item.key,
                 "questionID": item.questionID ?? "",
                 "dateKey": item.dateKey ?? "",
                 "calendarDate": item.calendarDate ?? ""
@@ -349,10 +372,17 @@ final class FelpFitAlertCoordinator {
         case .weekly:
             var scheduled = 0
             for weekday in item.weekdays {
+                var adjustedWeekday = weekday
+                var adjustedSeconds = item.hour * 3_600 + item.minute * 60 - max(0, leadSeconds)
+                if adjustedSeconds < 0 {
+                    adjustedSeconds += 24 * 3_600
+                    adjustedWeekday = weekday == 1 ? 7 : weekday - 1
+                }
                 var components = DateComponents()
-                components.hour = item.hour
-                components.minute = item.minute
-                components.weekday = weekday
+                components.hour = adjustedSeconds / 3_600
+                components.minute = (adjustedSeconds % 3_600) / 60
+                components.second = adjustedSeconds % 60
+                components.weekday = adjustedWeekday
                 let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
                 let request = UNNotificationRequest(
                     identifier: "\(notificationIdentifier(for: item.key)).w\(weekday)",
@@ -368,8 +398,10 @@ final class FelpFitAlertCoordinator {
             }
             return scheduled
         case .fixed:
-            guard let date = item.fireDate else { return 0 }
-            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+            guard let originalDate = item.fireDate else { return 0 }
+            let date = originalDate.addingTimeInterval(TimeInterval(-max(0, leadSeconds)))
+            guard date > Date().addingTimeInterval(2) else { return 0 }
+            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
             let request = UNNotificationRequest(
                 identifier: notificationIdentifier(for: item.key),
@@ -408,6 +440,15 @@ final class FelpFitAlertCoordinator {
         } catch {
             lastScheduleErrors.append("\(identifier): \(error.localizedDescription)")
         }
+    }
+
+    func cancelAlarm(forKey key: String) {
+        guard !key.isEmpty else { return }
+        #if canImport(AlarmKit)
+        if #available(iOS 26.0, *), let rawID = alarmIDs[key], let id = UUID(uuidString: rawID) {
+            try? AlarmManager.shared.cancel(id: id)
+        }
+        #endif
     }
 
     private func persistCurrentItems() {

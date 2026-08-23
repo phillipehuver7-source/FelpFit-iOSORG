@@ -6,7 +6,7 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
-    private static let nativeBuild = 148
+    private static let nativeBuild = 149
     private static let updateNotificationPrefix = "felpfit.webupdate."
 
     private let updateCoordinator = FelpFitUpdateCoordinator.shared
@@ -89,6 +89,12 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             self,
             selector: #selector(remoteNotificationReceived),
             name: .felpFitRemoteNotificationReceived,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(deepLinkReceived(_:)),
+            name: .felpFitDeepLinkReceived,
             object: nil
         )
 
@@ -187,6 +193,39 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         webUpdateCheckTask?.cancel()
         webUpdateCheckTask = Task { [weak self] in
             _ = await self?.checkForWebUpdate(showCurrentMessage: false)
+        }
+    }
+
+    @objc private func deepLinkReceived(_ notification: Notification) {
+        guard let url = notification.userInfo?["url"] as? URL else { return }
+        handleDeepLink(url)
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme?.lowercased() == "felpfit" else { return }
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var values: [String: String] = [:]
+        for item in components?.queryItems ?? [] where values[item.name] == nil {
+            values[item.name] = item.value ?? ""
+        }
+        let route = [url.host, url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
+            .compactMap { $0 }
+            .first { !$0.isEmpty } ?? "open"
+
+        if route == "update" {
+            pendingNotificationIntent = ["kind": "webUpdate", "remoteVersion": values["version"] ?? ""]
+        } else {
+            pendingNotificationIntent = [
+                "questionID": values["question"] ?? values["questionID"] ?? "",
+                "dateKey": values["date"] ?? values["dateKey"] ?? Self.todayKey(),
+                "calendarDate": values["calendarDate"] ?? ""
+            ]
+        }
+
+        if webView.url == nil {
+            loadFelpFit()
+        } else {
+            applyPendingNotificationIntentIfPossible()
         }
     }
 
@@ -701,6 +740,8 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
                 capabilities["capabilities"] = [
                     "alerts-v2",
                     "alarmkit-v1",
+                    "paired-alerts-v1",
+                    "deep-links-v1",
                     "web-update-v1",
                     "remote-alert-sync-v1",
                     "update-notifications-v1",
@@ -746,6 +787,11 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let info = response.notification.request.content.userInfo
+        if let scheduleKey = info["scheduleKey"] as? String {
+            FelpFitAlertCoordinator.shared.cancelAlarm(forKey: scheduleKey)
+        }
+
         if response.actionIdentifier == "FELPFIT_SNOOZE_10" {
             Task {
                 await FelpFitAlertCoordinator.shared.snooze(notification: response.notification, minutes: 10)
@@ -754,7 +800,6 @@ final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUID
             return
         }
 
-        let info = response.notification.request.content.userInfo
         let felpfitIntent = (info["type"] as? String) ?? ""
 
         if felpfitIntent == "webUpdate" {
