@@ -1,4 +1,5 @@
 import UIKit
+import UserNotifications
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -13,7 +14,31 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         window.rootViewController = FelpFitViewController()
         window.makeKeyAndVisible()
         self.window = window
+        FelpFitPushCoordinator.shared.configure(application: application)
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        FelpFitPushCoordinator.shared.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        FelpFitPushCoordinator.shared.didFailToRegister(error: error)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        FelpFitPushCoordinator.shared.handleRemoteNotification(userInfo)
+        completionHandler(.newData)
     }
 }
 

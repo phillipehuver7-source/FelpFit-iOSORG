@@ -22,11 +22,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.felpfit.ios
         PRODUCT_NAME: FelpFit
         INFOPLIST_FILE: FelpFit/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FelpFit/FelpFit.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: 1.5.0
-        CURRENT_PROJECT_VERSION: 146
+        CURRENT_PROJECT_VERSION: 148
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     scheme:
       gatherCoverageData: false

@@ -6,8 +6,8 @@ import AlarmKit
 import SwiftUI
 #endif
 
-struct FelpFitScheduleItem: Hashable {
-    enum Kind: String {
+struct FelpFitScheduleItem: Hashable, Codable {
+    enum Kind: String, Codable {
         case weekly
         case fixed
     }
@@ -75,6 +75,7 @@ final class FelpFitAlertCoordinator {
         static let alarmIDs = "felpfit.nativeAlerts.alarmIDs.v1"
         static let scheduleFingerprint = "felpfit.nativeAlerts.scheduleFingerprint.v2"
         static let explanationShown = "felpfit.nativeAlerts.explanationShown.v1"
+        static let currentItems = "felpfit.nativeAlerts.currentItems.v2"
     }
 
     private let defaults = UserDefaults.standard
@@ -83,8 +84,15 @@ final class FelpFitAlertCoordinator {
     private var lastFallbackCount = 0
     private var lastScheduledAlarmCount = 0
     private var lastScheduledNotificationCount = 0
+    private var lastScheduleErrors: [String] = []
 
-    private init() {}
+    private init() {
+        guard
+            let data = defaults.data(forKey: DefaultsKey.currentItems),
+            let items = try? JSONDecoder().decode([FelpFitScheduleItem].self, from: data)
+        else { return }
+        currentItems = items
+    }
 
     var shouldShowPermissionExplanation: Bool {
         !defaults.bool(forKey: DefaultsKey.explanationShown)
@@ -121,8 +129,8 @@ final class FelpFitAlertCoordinator {
         enabledByKey[key] ?? true
     }
 
-    private func isUrgent(_ key: String) -> Bool {
-        urgentByKey[key] ?? true
+    private func isUrgent(_ item: FelpFitScheduleItem) -> Bool {
+        urgentByKey[item.preferenceKey] ?? (item.category == "mission")
     }
 
     func getState() async -> [String: Any] {
@@ -156,6 +164,7 @@ final class FelpFitAlertCoordinator {
             }
             return true
         }
+        persistCurrentItems()
 
         await rescheduleAll(force: force)
         return await stateDictionary()
@@ -226,10 +235,16 @@ final class FelpFitAlertCoordinator {
             content.title = "FelpFit • teste"
             content.body = "Notificação nativa funcionando."
             content.sound = .default
+            content.categoryIdentifier = "FELPFIT_REMINDER"
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 30, repeats: false)
             let request = UNNotificationRequest(identifier: "felpfit.native.test", content: content, trigger: trigger)
-            try? await notificationCenter.add(request)
-            return await stateDictionary(message: "Teste de notificação agendado para daqui a 30 segundos.")
+            do {
+                try await notificationCenter.add(request)
+                return await stateDictionary(message: "Teste de notificação confirmado para daqui a 30 segundos.")
+            } catch {
+                lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
+                return await stateDictionary(message: "O iPhone recusou o teste de notificação: \(error.localizedDescription)")
+            }
         }
 
         return await stateDictionary(message: "O iPhone ainda não autorizou alarmes nem notificações.")
@@ -247,8 +262,18 @@ final class FelpFitAlertCoordinator {
         lastFallbackCount = 0
         lastScheduledAlarmCount = 0
         lastScheduledNotificationCount = 0
+        lastScheduleErrors = []
 
-        notificationCenter.removeAllPendingNotificationRequests()
+        // Remove somente os lembretes gerenciados pela agenda. Notificações de
+        // update e o teste de 30 segundos pertencem a fluxos independentes e
+        // não podem ser cancelados por uma sincronização automática.
+        let pendingRequests = await notificationCenter.pendingNotificationRequests()
+        let managedIdentifiers = pendingRequests
+            .map(\.identifier)
+            .filter { identifier in
+                identifier.hasPrefix("felpfit.native.") && identifier != "felpfit.native.test"
+            }
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: managedIdentifiers)
         cancelKnownAlarmKitAlarms()
 
         guard masterEnabled else {
@@ -266,7 +291,7 @@ final class FelpFitAlertCoordinator {
         }
 
         for item in orderedItems where isEnabled(item.preferenceKey) {
-            if isUrgent(item.preferenceKey) {
+            if isUrgent(item) {
                 var didScheduleUrgent = false
                 #if canImport(AlarmKit)
                 if #available(iOS 26.0, *), AlarmManager.shared.authorizationState == .authorized {
@@ -281,13 +306,12 @@ final class FelpFitAlertCoordinator {
                 #endif
 
                 if !didScheduleUrgent, canUseNotifications(notificationSettings.authorizationStatus) {
-                    await scheduleLocalNotification(item)
-                    lastFallbackCount += 1
-                    lastScheduledNotificationCount += 1
+                    let count = await scheduleLocalNotification(item)
+                    if count > 0 { lastFallbackCount += 1 }
+                    lastScheduledNotificationCount += count
                 }
             } else if canUseNotifications(notificationSettings.authorizationStatus) {
-                await scheduleLocalNotification(item)
-                lastScheduledNotificationCount += 1
+                lastScheduledNotificationCount += await scheduleLocalNotification(item)
             }
         }
 
@@ -302,12 +326,17 @@ final class FelpFitAlertCoordinator {
         "felpfit.native.\(key)"
     }
 
-    private func scheduleLocalNotification(_ item: FelpFitScheduleItem) async {
+    @discardableResult
+    private func scheduleLocalNotification(_ item: FelpFitScheduleItem) async -> Int {
         let makeContent: () -> UNMutableNotificationContent = {
             let content = UNMutableNotificationContent()
             content.title = item.title
             content.body = item.body
             content.sound = .default
+            content.categoryIdentifier = item.category == "hydration"
+                ? "FELPFIT_HYDRATION"
+                : "FELPFIT_REMINDER"
+            content.threadIdentifier = "felpfit.\(item.category)"
             content.userInfo = [
                 "questionID": item.questionID ?? "",
                 "dateKey": item.dateKey ?? "",
@@ -318,6 +347,7 @@ final class FelpFitAlertCoordinator {
 
         switch item.kind {
         case .weekly:
+            var scheduled = 0
             for weekday in item.weekdays {
                 var components = DateComponents()
                 components.hour = item.hour
@@ -329,10 +359,16 @@ final class FelpFitAlertCoordinator {
                     content: makeContent(),
                     trigger: trigger
                 )
-                try? await notificationCenter.add(request)
+                do {
+                    try await notificationCenter.add(request)
+                    scheduled += 1
+                } catch {
+                    lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
+                }
             }
+            return scheduled
         case .fixed:
-            guard let date = item.fireDate else { return }
+            guard let date = item.fireDate else { return 0 }
             let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
             let request = UNNotificationRequest(
@@ -340,8 +376,43 @@ final class FelpFitAlertCoordinator {
                 content: makeContent(),
                 trigger: trigger
             )
-            try? await notificationCenter.add(request)
+            do {
+                try await notificationCenter.add(request)
+                return 1
+            } catch {
+                lastScheduleErrors.append("\(request.identifier): \(error.localizedDescription)")
+                return 0
+            }
         }
+    }
+
+    func snooze(notification: UNNotification, minutes: Int = 10) async {
+        let source = notification.request.content
+        let content = UNMutableNotificationContent()
+        content.title = source.title
+        content.subtitle = source.subtitle
+        content.body = source.body
+        content.sound = source.sound ?? .default
+        content.userInfo = source.userInfo
+        content.categoryIdentifier = source.categoryIdentifier
+        content.threadIdentifier = source.threadIdentifier
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: TimeInterval(max(1, minutes) * 60),
+            repeats: false
+        )
+        let identifier = "felpfit.native.snooze.\(UUID().uuidString)"
+        do {
+            try await notificationCenter.add(
+                UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+            )
+        } catch {
+            lastScheduleErrors.append("\(identifier): \(error.localizedDescription)")
+        }
+    }
+
+    private func persistCurrentItems() {
+        guard let data = try? JSONEncoder().encode(currentItems) else { return }
+        defaults.set(data, forKey: DefaultsKey.currentItems)
     }
 
     private func canUseNotifications(_ status: UNAuthorizationStatus) -> Bool {
@@ -380,7 +451,7 @@ final class FelpFitAlertCoordinator {
 
     private func makeFingerprint(notificationStatus: Int, alarmStatus: String) -> String {
         let itemPart = currentItems.sorted { $0.key < $1.key }.map { item in
-            "\(item.key)|pref=\(item.preferenceKey)|\(item.kind.rawValue)|\(item.hour):\(item.minute)|\(item.weekdays)|\(item.fireAtMilliseconds ?? 0)|\(isEnabled(item.preferenceKey))|\(isUrgent(item.preferenceKey))"
+            "\(item.key)|pref=\(item.preferenceKey)|\(item.kind.rawValue)|\(item.hour):\(item.minute)|\(item.weekdays)|\(item.fireAtMilliseconds ?? 0)|\(isEnabled(item.preferenceKey))|\(isUrgent(item))"
         }.joined(separator: "~")
         return "native-v2|master=\(masterEnabled)|notif=\(notificationStatus)|alarm=\(alarmStatus)|\(itemPart)"
     }
@@ -388,11 +459,15 @@ final class FelpFitAlertCoordinator {
     private func stateDictionary(message: String? = nil) async -> [String: Any] {
         let notificationStatus = await notificationAuthorizationStatus()
         let alarmStatus = alarmAuthorizationStatus()
+        let pendingRequests = await notificationCenter.pendingNotificationRequests()
+        let pendingManaged = pendingRequests.filter {
+            $0.identifier.hasPrefix("felpfit.native.") && $0.identifier != "felpfit.native.test"
+        }
         var prefs: [String: [String: Bool]] = [:]
         for item in currentItems {
             prefs[item.preferenceKey] = [
                 "enabled": isEnabled(item.preferenceKey),
-                "urgent": isUrgent(item.preferenceKey)
+                "urgent": isUrgent(item)
             ]
         }
 
@@ -404,7 +479,9 @@ final class FelpFitAlertCoordinator {
             "preferences": prefs,
             "scheduledAlarmCount": lastScheduledAlarmCount,
             "scheduledNotificationCount": lastScheduledNotificationCount,
+            "verifiedPendingNotificationCount": pendingManaged.count,
             "fallbackCount": lastFallbackCount,
+            "scheduleErrors": Array(lastScheduleErrors.suffix(12)),
             "native": true
         ]
         if let message { result["message"] = message }
@@ -502,7 +579,7 @@ final class FelpFitAlertCoordinator {
     private func cancelKnownAlarmKitAlarms() {
         #if canImport(AlarmKit)
         if #available(iOS 26.0, *) {
-            for value in alarmIDs.values {
+            for (key, value) in alarmIDs where key != "__felpfit_test_alarm__" {
                 guard let id = UUID(uuidString: value) else { continue }
                 try? AlarmManager.shared.cancel(id: id)
             }

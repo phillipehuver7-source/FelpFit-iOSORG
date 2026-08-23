@@ -41,10 +41,15 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:144
+        nativeBuild:148,
+        verifiedPendingNotificationCount:0,
+        scheduleErrors:[],
+        remotePushSupported:true,
+        remotePushRegistered:false
       };
       let items = [];
       let lastScheduleSignature = "";
+      let remotePushRegistration = {token:"",registeredToken:"",inFlight:false,retryTimer:0};
 
       function hashString(value){
         let hash = 2166136261;
@@ -73,6 +78,42 @@ struct FelpFitNativeBridge {
         const version=currentWebVersion();
         state.currentWebVersion=version;
         postNative({command:"webVersion",version});
+      }
+
+      async function registerRemotePushIfPossible(payload=state){
+        const token=String(payload.deviceToken||state.deviceToken||"").trim();
+        if(!token || remotePushRegistration.inFlight || remotePushRegistration.registeredToken===token) return;
+        remotePushRegistration.token=token;
+        remotePushRegistration.inFlight=true;
+        clearTimeout(remotePushRegistration.retryTimer);
+        try{
+          const response=await fetch("/api/native-push/register",{
+            method:"POST",
+            credentials:"include",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({
+              token,
+              environment:String(payload.environment||state.environment||"production"),
+              bundleIdentifier:String(payload.bundleIdentifier||state.bundleIdentifier||"app.felpfit.ios"),
+              nativeBuild:String(payload.nativeBuild||state.nativeBuild||148),
+              nativeVersion:String(payload.nativeVersion||state.nativeVersion||"1.5.0"),
+              webVersion:currentWebVersion()
+            })
+          });
+          if(!response.ok) throw new Error(`HTTP ${response.status}`);
+          const registration=await response.json().catch(()=>({}));
+          remotePushRegistration.registeredToken=token;
+          state.remotePushRegistered=true;
+          state.remotePushProviderConfigured=registration.providerConfigured===true;
+          state.remotePushRegistrationError="";
+        }catch(error){
+          state.remotePushRegistered=false;
+          state.remotePushRegistrationError=String(error?.message||error);
+          remotePushRegistration.retryTimer=setTimeout(()=>registerRemotePushIfPossible(state),30000);
+        }finally{
+          remotePushRegistration.inFlight=false;
+          if(!document.getElementById("notificationModal")?.classList.contains("hidden")) render();
+        }
       }
 
       function parseClock(clock){
@@ -109,17 +150,20 @@ struct FelpFitNativeBridge {
             const clock=parseClock(q.time);
             if(!clock) continue;
             const category=String(q.id||"").startsWith("water_") ? "hydration" : "mission";
-            const signature=[q.id,q.time,q.text||"",q.context||"",category].join("|");
+            // Weekday is part of the identity so Tuesday can be disabled while
+            // the same reminder remains enabled on Thursday.
+            const signature=[calendarWeekday,q.id,q.time,q.text||"",q.context||"",category].join("|");
             if(!grouped.has(signature)){
               grouped.set(signature,{
-                key:`weekly:${q.id}:${q.time}:${hashString(signature)}`,
+                key:`weekly:d${calendarWeekday}:${q.id}:${q.time}:${hashString(signature)}`,
+                preferenceKey:`day:${calendarWeekday}:${q.id}:${q.time}:${hashString(signature)}`,
                 kind:"weekly",
                 title:`FelpFit • ${shortLabel(q)}`,
                 displayTitle:`${itemIcon(q)} ${shortLabel(q)}`,
                 body:[q.text,q.context].filter(Boolean).join(" • "),
                 hour:clock.hour,
                 minute:clock.minute,
-                weekdays:[],
+                weekdays:[calendarWeekday],
                 questionID:String(q.id||""),
                 dateKey:"",
                 calendarDate:"",
@@ -128,8 +172,6 @@ struct FelpFitNativeBridge {
                 time:String(q.time||"")
               });
             }
-            const item=grouped.get(signature);
-            if(!item.weekdays.includes(calendarWeekday)) item.weekdays.push(calendarWeekday);
           }
         }
         return [...grouped.values()].map(item=>({...item,weekdays:item.weekdays.sort((a,b)=>a-b)}));
@@ -358,8 +400,7 @@ struct FelpFitNativeBridge {
           .ff-native-section{border:1px solid var(--line);border-radius:18px;background:var(--panel2);overflow:hidden}.ff-native-section summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px}.ff-native-section summary::-webkit-details-marker{display:none}.ff-native-section summary span{display:grid;gap:3px}.ff-native-section summary small{color:var(--muted);font-size:10px;font-weight:600}.ff-native-section summary em{font-style:normal;font-size:10px;font-weight:900;padding:5px 7px;border:1px solid var(--line);border-radius:999px;color:var(--accent2)}
           .ff-native-list{display:grid;border-top:1px solid var(--line)}.ff-native-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px;border-bottom:1px solid rgba(255,255,255,.055);transition:.2s ease}.ff-native-row:last-child{border-bottom:0}.ff-native-row.off{opacity:.5}.ff-native-row-copy{min-width:0;display:grid;gap:3px}.ff-native-row-copy b{font-size:12px;line-height:1.35}.ff-native-row-copy span{font-size:10px;color:var(--accent2);font-weight:850}.ff-native-row-copy small{font-size:9px;color:var(--muted);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ff-native-row-actions{display:flex;align-items:center;gap:6px;flex:none}.ff-switch,.ff-urgent{height:34px;border-radius:12px;border:1px solid var(--line);background:var(--panel3);color:var(--muted);font-weight:900}.ff-switch{min-width:48px;font-size:10px}.ff-switch.on{color:#a8f3cc;border-color:rgba(66,211,146,.38);background:rgba(66,211,146,.1)}.ff-urgent{width:38px;font-size:16px}.ff-urgent.on{border-color:rgba(255,115,96,.42);background:rgba(255,90,70,.11);box-shadow:0 0 24px rgba(255,90,70,.08)}.ff-urgent:disabled{opacity:.35}.ff-native-empty{padding:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
           .ff-native-toast{position:fixed;left:50%;bottom:max(24px,env(safe-area-inset-bottom));z-index:9999;transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:10px 13px;border:1px solid var(--line);border-radius:14px;background:#15151d;color:#fff;font-size:11px;font-weight:800;box-shadow:0 20px 60px rgba(0,0,0,.4);transition:.25s ease}.ff-native-toast.show{opacity:1;transform:translate(-50%,0)}
-          .ff-web-update{position:fixed;z-index:10020;left:12px;right:12px;top:max(12px,env(safe-area-inset-top));display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 13px 13px 15px;border:1px solid color-mix(in srgb,var(--accent) 48%,var(--line));border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--panel) 94%,var(--accent) 6%),var(--panel3));box-shadow:0 20px 70px rgba(0,0,0,.5),0 0 32px color-mix(in srgb,var(--accent) 15%,transparent);animation:ffUpdateIn .32s cubic-bezier(.2,.8,.2,1) both;backdrop-filter:blur(18px)}.ff-web-update-copy{min-width:0;display:grid;gap:3px}.ff-web-update-copy b{font-size:12px}.ff-web-update-copy small{font-size:10px;color:var(--muted);line-height:1.4}.ff-web-update button{flex:none;border:0;border-radius:13px;padding:10px 12px;color:#fff;background:linear-gradient(135deg,var(--accent),#5d3fc4);font-size:10px;font-weight:950;box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 22%,transparent)}@keyframes ffUpdateIn{from{opacity:0;transform:translateY(-14px) scale(.97)}to{opacity:1;transform:none}}
-          @media(max-width:520px){#notificationModal .modal.ff-native-modal{max-height:92dvh}.ff-native-actions{grid-template-columns:1fr}.ff-native-head{padding:16px 15px 12px}.ff-native-body{padding:12px}.ff-native-row{align-items:flex-start}.ff-native-row-actions{padding-top:2px}.ff-web-update{left:9px;right:9px}}
+          @media(max-width:520px){#notificationModal .modal.ff-native-modal{max-height:92dvh}.ff-native-actions{grid-template-columns:1fr}.ff-native-head{padding:16px 15px 12px}.ff-native-body{padding:12px}.ff-native-row{align-items:flex-start}.ff-native-row-actions{padding-top:2px}}
         `;
         document.head.appendChild(style);
       }
@@ -371,25 +412,6 @@ struct FelpFitNativeBridge {
         node.classList.add("show");
         clearTimeout(window.__felpfitNativeToastTimer);
         window.__felpfitNativeToastTimer=setTimeout(()=>node.classList.remove("show"),2600);
-      }
-
-      function hideWebUpdateBanner(){
-        document.getElementById("felpfit-web-update")?.remove();
-      }
-
-      function showWebUpdateBanner(payload={}){
-        ensureStyle();
-        let node=document.getElementById("felpfit-web-update");
-        if(!node){
-          node=document.createElement("div");
-          node.id="felpfit-web-update";
-          node.className="ff-web-update";
-          document.body.appendChild(node);
-        }
-        const remote=String(payload.remoteVersion||"").trim();
-        const label=remote?`Versão ${remote} pronta`:`Nova versão online pronta`;
-        node.innerHTML=`<div class="ff-web-update-copy"><b>🚀 Atualização do FelpFit</b><small>${escapeHtml(label)}. Atualiza a interface sem trocar a IPA.</small></div><button type="button">ATUALIZAR</button>`;
-        node.querySelector("button")?.addEventListener("click",()=>postNative({command:"applyWebUpdate"}),{once:true});
       }
 
       function render(){
@@ -409,6 +431,7 @@ struct FelpFitNativeBridge {
             <div class="ff-native-status">
               <span class="ff-native-chip ${statusClass(state.alarmStatus)}">🚨 ${statusText(state.alarmStatus,"alarm")}</span>
               <span class="ff-native-chip ${statusClass(state.notificationStatus)}">🔔 ${statusText(state.notificationStatus,"notification")}</span>
+              <span class="ff-native-chip ${state.remotePushRegistered&&state.remotePushProviderConfigured?"ok":"wait"}">📡 ${state.remotePushRegistered?(state.remotePushProviderConfigured?"Push remoto pronto":"Push aguardando Apple"):"Push remoto aguardando"}</span>
             </div>
           </div>
           <div class="ff-native-body">
@@ -419,7 +442,6 @@ struct FelpFitNativeBridge {
             <div class="ff-native-actions">
               <button type="button" class="primary" data-native-permissions>Permitir alarmes + notificações</button>
               <button type="button" data-native-test>Testar em 30 segundos</button>
-              <button type="button" data-native-update-check>Buscar atualização</button>
             </div>
             <div class="ff-native-note"><strong>🚨 Urgente</strong> usa o AlarmKit do iPhone e pode romper Silencioso e Foco. Toque no 🚨 de uma missão para trocar por <strong>🔔 notificação normal</strong>. O botão ON/OFF desliga aquele aviso por completo.</div>
             ${fallback?`<div class="ff-native-note ff-native-warning">⚠️ ${fallback} alerta(s) urgente(s) estão usando notificação normal porque o AlarmKit ficou indisponível ou atingiu o limite do sistema. Missões têm prioridade sobre hidratação e calendário.</div>`:""}
@@ -427,13 +449,13 @@ struct FelpFitNativeBridge {
             ${sectionHtml("Hidratação","Os 8 blocos de água também podem tocar.","hydration",false)}
             ${sectionHtml("Calendário personalizado","Só entra aqui o que você marcou com antecedência maior que zero.","calendar",false)}
             <div class="ff-native-note">Agendados agora: <strong>${Number(state.scheduledAlarmCount||0)} urgentes</strong> • <strong>${Number(state.scheduledNotificationCount||0)} normais</strong>. Mudou calendário ou rotina? O app sincroniza novamente sozinho.</div>
+            ${Array.isArray(state.scheduleErrors)&&state.scheduleErrors.length?`<div class="ff-native-note ff-native-warning">⚠️ O iPhone recusou ${state.scheduleErrors.length} agendamento(s). Toque em “Permitir alarmes + notificações” e sincronize novamente.</div>`:""}
           </div>`;
 
         modal.querySelector("[data-native-close]")?.addEventListener("click",()=>overlay.classList.add("hidden"));
         modal.querySelector("[data-native-master]")?.addEventListener("click",()=>postNative({command:"toggleMaster",enabled:!(state.masterEnabled!==false)}));
         modal.querySelector("[data-native-permissions]")?.addEventListener("click",()=>postNative({command:"requestPermissions"}));
         modal.querySelector("[data-native-test]")?.addEventListener("click",()=>postNative({command:"testAlert"}));
-        modal.querySelector("[data-native-update-check]")?.addEventListener("click",()=>postNative({command:"checkWebUpdate"}));
         modal.querySelectorAll("[data-action][data-key]").forEach(button=>{
           button.addEventListener("click",()=>{
             const key=button.dataset.key;
@@ -462,16 +484,15 @@ struct FelpFitNativeBridge {
         if(payload.type==="webUpdate"){
           state.webUpdateAvailable=payload.available===true;
           state.remoteWebVersion=String(payload.remoteVersion||state.remoteWebVersion||"");
-          if(payload.available===true) showWebUpdateBanner(payload);
-          else hideWebUpdateBanner();
         }
+        if(payload.deviceToken) registerRemotePushIfPossible(payload);
         if(payload.message) toast(payload.message);
         if(!document.getElementById("notificationModal")?.classList.contains("hidden")) render();
         const badge=document.getElementById("notificationHomeBadge");
         if(badge) badge.textContent=state.masterEnabled!==false?"nativo":"pausado";
       };
 
-      window.__felpfitNativeKick = () => { reportWebVersion(); sync(false,true); postNative({command:"getCapabilities"}); };
+      window.__felpfitNativeKick = () => { reportWebVersion(); sync(false,true); postNative({command:"getCapabilities"}); postNative({command:"registerRemotePush"}); };
       window.__felpfitNativeSync = () => { reportWebVersion(); sync(false,true); };
 
       // Keep the existing menu entry, but route it to the native center.
@@ -489,27 +510,25 @@ struct FelpFitNativeBridge {
       // these primitives without changing the IPA as long as no brand-new iOS
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
-        engineVersion:"1.0",
-        nativeBuild:144,
-        capabilities:["alerts-v1","alarmkit-v1","web-update-v1","remote-alert-sync-v1"],
+        engineVersion:"2.0",
+        nativeBuild:148,
+        capabilities:["alerts-v2","alarmkit-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),
         getState:()=>postNative({command:"getState"}),
         requestPermissions:()=>postNative({command:"requestPermissions"}),
         testAlert:()=>postNative({command:"testAlert"}),
         checkForUpdate:()=>postNative({command:"checkWebUpdate"}),
-        applyUpdate:()=>postNative({command:"applyWebUpdate"})
+        registerRemotePush:()=>postNative({command:"registerRemotePush"}),
+        testRemotePush:async()=>fetch("/api/native-push/test",{method:"POST",credentials:"include"})
       });
-
-      window.__felpfitNativeWebUpdateAvailable = showWebUpdateBanner;
-      window.__felpfitNativeWebUpdateApplied = hideWebUpdateBanner;
 
       // Old PWA push is intentionally not used inside the real iOS app.
       window.enablePushNotifications = () => window.openNotificationSettings();
       window.disablePushNotifications = () => window.openNotificationSettings();
       window.sendPushTest = () => postNative({command:"testAlert"});
 
-      setTimeout(()=>{reportWebVersion();sync(false,false);},900);
+      setTimeout(()=>{reportWebVersion();sync(false,false);postNative({command:"registerRemotePush"});},900);
       setInterval(()=>sync(false),60000);
     })();
     """#

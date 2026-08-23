@@ -1,6 +1,6 @@
 workflows:
   felpfit-ios-unsigned:
-    name: FelpFit iOS Unsigned IPA
+    name: FelpFit iOS Build 148 Capability IPA
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
@@ -12,6 +12,9 @@ workflows:
       - name: Generate Xcode project
         script: |
           xcodegen generate
+          xcodebuild -project FelpFit.xcodeproj -scheme FelpFit -showBuildSettings | grep -E "PRODUCT_BUNDLE_IDENTIFIER|CURRENT_PROJECT_VERSION|MARKETING_VERSION|CODE_SIGN_ENTITLEMENTS"
+          plutil -lint FelpFit/Info.plist
+          plutil -lint FelpFit/FelpFit.entitlements
       - name: Build iPhone app without signing
         script: |
           xcodebuild \
@@ -31,6 +34,13 @@ workflows:
           ditto "$APP_PATH" build/ipa/Payload/FelpFit.app
           cd build/ipa
           /usr/bin/zip -qry ../FelpFit-unsigned.ipa Payload
+      - name: Verify packaged capability build
+        script: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/FelpFit.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "148"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "app.felpfit.ios"
+          test -f "FelpFit/FelpFit.entitlements"
     artifacts:
       - build/FelpFit-unsigned.ipa
       - build/DerivedData/Build/Products/Release-iphoneos/FelpFit.app
+      - FelpFit/FelpFit.entitlements
