@@ -1,0 +1,102 @@
+name: FelpFit Cloudflare Source Inspect
+
+on:
+  push:
+    branches:
+      - felpfit-pages-v2-preflight
+    paths:
+      - ".github/workflows/felpfit-cloudflare-inspect.yml"
+      - "cloudflare-source/inspect-trigger.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PROJECT_NAME: felpfit
+      DEPLOYMENT_ID: 2af97890-6ca8-4aca-940b-4622fcbe3432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect current Pages deployment (read only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inspect
+          API="https://api.cloudflare.com/client/v4"
+          AUTH="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+
+          curl -fsS \
+            -H "$AUTH" \
+            "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}" \
+            > inspect/project.raw.json
+
+          curl -fsS \
+            -H "$AUTH" \
+            "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}/deployments/${DEPLOYMENT_ID}" \
+            > inspect/deployment.raw.json
+
+          jq -e '.success == true' inspect/project.raw.json >/dev/null
+          jq -e '.success == true' inspect/deployment.raw.json >/dev/null
+
+          DEPLOY_SCRIPT="$(jq -r '.result.source.config.production_script_name // empty' inspect/deployment.raw.json)"
+          PROJECT_SCRIPT="$(jq -r '.result.source.config.production_script_name // empty' inspect/project.raw.json)"
+          SCRIPT_NAME="${DEPLOY_SCRIPT:-$PROJECT_SCRIPT}"
+
+          jq -n \
+            --arg deployment_id "$(jq -r '.result.id // ""' inspect/deployment.raw.json)" \
+            --arg short_id "$(jq -r '.result.short_id // ""' inspect/deployment.raw.json)" \
+            --arg environment "$(jq -r '.result.environment // ""' inspect/deployment.raw.json)" \
+            --arg source_type "$(jq -r '.result.source.type // ""' inspect/deployment.raw.json)" \
+            --arg script "$SCRIPT_NAME" \
+            --arg uses_functions "$(jq -r '.result.source.config.uses_functions // .result.uses_functions // ""' inspect/deployment.raw.json)" \
+            --arg project_script "$PROJECT_SCRIPT" \
+            '{deployment_id:$deployment_id,short_id:$short_id,environment:$environment,source_type:$source_type,production_script_name:$script,project_production_script_name:$project_script,uses_functions:$uses_functions}' \
+            > inspect/metadata.json
+
+          echo "Sanitized Pages metadata:"
+          cat inspect/metadata.json
+
+          # Never publish raw project/deployment JSON because it can contain account configuration.
+          rm -f inspect/project.raw.json inspect/deployment.raw.json
+
+          if [ -n "$SCRIPT_NAME" ]; then
+            ENCODED_SCRIPT="$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["SCRIPT_NAME"], safe=""))' SCRIPT_NAME="$SCRIPT_NAME" 2>/dev/null || true)"
+            if [ -z "$ENCODED_SCRIPT" ]; then
+              ENCODED_SCRIPT="$(python3 - "$SCRIPT_NAME" <<'PY'
+import sys, urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe=''))
+PY
+)"
+            fi
+            STATUS="$(curl -sS -o inspect/current-pages-worker.bin -w '%{http_code}' -H "$AUTH" "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${ENCODED_SCRIPT}/content")"
+            echo "Worker content HTTP status: $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              sha256sum inspect/current-pages-worker.bin | tee inspect/current-pages-worker.sha256
+              wc -c inspect/current-pages-worker.bin | tee inspect/current-pages-worker.bytes
+            else
+              rm -f inspect/current-pages-worker.bin
+            fi
+          else
+            echo "No production_script_name exposed by Pages API."
+          fi
+
+          # As a fallback, list only script names that look related to FelpFit/Pages.
+          STATUS="$(curl -sS -o inspect/workers-list.raw.json -w '%{http_code}' -H "$AUTH" "$API/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts")"
+          if [ "$STATUS" = "200" ] && jq -e '.success == true' inspect/workers-list.raw.json >/dev/null 2>&1; then
+            jq '[.result[] | {id:(.id // .name // ""), modified_on:(.modified_on // "")} | select((.id|ascii_downcase|contains("felp")) or (.id|ascii_downcase|contains("page")))]' inspect/workers-list.raw.json > inspect/related-worker-names.json
+          fi
+          rm -f inspect/workers-list.raw.json
+
+      - name: Upload inspection artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: felpfit-cloudflare-current-source-inspection
+          path: inspect/
+          if-no-files-found: error
+          retention-days: 1
