@@ -17,6 +17,10 @@ targets:
     platform: iOS
     sources:
       - path: FelpFit
+        excludes:
+          - FelmoNotificationReactions/**
+      - path: FelpFit/FelmoNotificationReactions
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.felpfit.ios
