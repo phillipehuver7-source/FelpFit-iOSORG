@@ -6,7 +6,7 @@ import CryptoKit
 final class FelpFitViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private static let appURL = URL(string: "https://felpfit.pages.dev/")!
     private static let bridgeName = "felpfitNative"
-    private static let nativeBuild = 151
+    private static let nativeBuild = 152
     private static let updateNotificationPrefix = "felpfit.webupdate."
 
     private let updateCoordinator = FelpFitUpdateCoordinator.shared

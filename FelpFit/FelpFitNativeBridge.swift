@@ -41,7 +41,7 @@ struct FelpFitNativeBridge {
         webUpdateAvailable:false,
         remoteWebVersion:"",
         currentWebVersion:"",
-        nativeBuild:151,
+        nativeBuild:152,
         verifiedPendingNotificationCount:0,
         scheduleErrors:[],
         remotePushSupported:true,
@@ -95,8 +95,8 @@ struct FelpFitNativeBridge {
               token,
               environment:String(payload.environment||state.environment||"production"),
               bundleIdentifier:String(payload.bundleIdentifier||state.bundleIdentifier||"app.felpfit.ios"),
-              nativeBuild:String(payload.nativeBuild||state.nativeBuild||150),
-              nativeVersion:String(payload.nativeVersion||state.nativeVersion||"1.5.0"),
+              nativeBuild:String(payload.nativeBuild||state.nativeBuild||152),
+              nativeVersion:String(payload.nativeVersion||state.nativeVersion||"1.5.12"),
               webVersion:currentWebVersion()
             })
           });
@@ -519,8 +519,8 @@ struct FelpFitNativeBridge {
       // capability is required.
       window.FelpFitNative = Object.assign(window.FelpFitNative||{}, {
         engineVersion:"2.0",
-        nativeBuild:151,
-        capabilities:["alerts-v2","alarmkit-v1","paired-alerts-v1","deep-links-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2","native-keychain-credentials-v1","notification-intents-v2","update-lifecycle-notifications-v2"],
+        nativeBuild:152,
+        capabilities:["alerts-v2","alarmkit-v1","paired-alerts-v1","deep-links-v1","web-update-v1","remote-alert-sync-v1","remote-push-v1","notification-diagnostics-v2","native-keychain-credentials-v1","notification-intents-v2","update-lifecycle-notifications-v2","felmo-rich-notifications-v1"],
         syncAlerts:(customItems,force=true)=>postNative({command:"sync",items:Array.isArray(customItems)?customItems:[],force:Boolean(force)}),
         syncCurrentAlerts:(force=true)=>sync(Boolean(force),true),
         getState:()=>postNative({command:"getState"}),

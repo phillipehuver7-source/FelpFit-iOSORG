@@ -26,6 +26,41 @@ struct FelpFitScheduleItem: Hashable, Codable {
     let calendarDate: String?
     let category: String
     let defaultUrgent: Bool?
+    let felmoReaction: String?
+
+    init(
+        key: String,
+        preferenceKey: String,
+        title: String,
+        body: String,
+        kind: Kind,
+        hour: Int,
+        minute: Int,
+        weekdays: [Int],
+        fireAtMilliseconds: Double?,
+        questionID: String?,
+        dateKey: String?,
+        calendarDate: String?,
+        category: String,
+        defaultUrgent: Bool?,
+        felmoReaction: String?
+    ) {
+        self.key = key
+        self.preferenceKey = preferenceKey
+        self.title = title
+        self.body = body
+        self.kind = kind
+        self.hour = hour
+        self.minute = minute
+        self.weekdays = weekdays
+        self.fireAtMilliseconds = fireAtMilliseconds
+        self.questionID = questionID
+        self.dateKey = dateKey
+        self.calendarDate = calendarDate
+        self.category = category
+        self.defaultUrgent = defaultUrgent
+        self.felmoReaction = felmoReaction
+    }
 
     init?(dictionary: [String: Any]) {
         guard
@@ -50,6 +85,7 @@ struct FelpFitScheduleItem: Hashable, Codable {
         self.calendarDate = dictionary["calendarDate"] as? String
         self.category = (dictionary["category"] as? String) ?? "mission"
         self.defaultUrgent = (dictionary["defaultUrgent"] as? Bool) ?? (self.category == "mission")
+        self.felmoReaction = (dictionary["felmoReaction"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     var fireDate: Date? {
@@ -70,6 +106,10 @@ struct FelpFitAlarmMetadata: AlarmMetadata {
 final class FelpFitAlertCoordinator {
     static let shared = FelpFitAlertCoordinator()
     private static let testNotificationPrefix = "felpfit.native.test."
+    private static let supportedFelmoReactions: Set<String> = [
+        "happy", "proud", "worried", "hydration",
+        "focused", "sleepy", "cheeky", "surprised"
+    ]
 
     private enum DefaultsKey {
         static let masterEnabled = "felpfit.nativeAlerts.masterEnabled.v1"
@@ -221,7 +261,9 @@ final class FelpFitAlertCoordinator {
                 questionID: nil,
                 dateKey: nil,
                 calendarDate: nil,
-                category: "test"
+                category: "test",
+                defaultUrgent: true,
+                felmoReaction: nil
             )
             do {
                 let refreshedSettings = await notificationCenter.notificationSettings()
@@ -373,11 +415,15 @@ final class FelpFitAlertCoordinator {
                 ? "FELPFIT_HYDRATION"
                 : "FELPFIT_REMINDER"
             content.threadIdentifier = "felpfit.\(item.category)"
+            if let attachment = self.felmoNotificationAttachment(for: item) {
+                content.attachments = [attachment]
+            }
             content.userInfo = [
                 "scheduleKey": item.key,
                 "questionID": item.questionID ?? "",
                 "dateKey": item.dateKey ?? "",
-                "calendarDate": item.calendarDate ?? ""
+                "calendarDate": item.calendarDate ?? "",
+                "felmoReaction": item.felmoReaction ?? ""
             ]
             return content
         }
@@ -442,6 +488,7 @@ final class FelpFitAlertCoordinator {
         content.userInfo = source.userInfo
         content.categoryIdentifier = source.categoryIdentifier
         content.threadIdentifier = source.threadIdentifier
+        content.attachments = source.attachments
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: TimeInterval(max(1, minutes) * 60),
             repeats: false
@@ -506,9 +553,23 @@ final class FelpFitAlertCoordinator {
 
     private func makeFingerprint(notificationStatus: Int, alarmStatus: String) -> String {
         let itemPart = currentItems.sorted { $0.key < $1.key }.map { item in
-            "\(item.key)|pref=\(item.preferenceKey)|\(item.kind.rawValue)|\(item.hour):\(item.minute)|\(item.weekdays)|\(item.fireAtMilliseconds ?? 0)|\(isEnabled(item.preferenceKey))|\(isUrgent(item))"
+            "\(item.key)|pref=\(item.preferenceKey)|\(item.kind.rawValue)|\(item.hour):\(item.minute)|\(item.weekdays)|\(item.fireAtMilliseconds ?? 0)|\(isEnabled(item.preferenceKey))|\(isUrgent(item))|felmo=\(item.felmoReaction ?? "")"
         }.joined(separator: "~")
         return "native-v2|master=\(masterEnabled)|notif=\(notificationStatus)|alarm=\(alarmStatus)|\(itemPart)"
+    }
+
+    private func felmoNotificationAttachment(for item: FelpFitScheduleItem) -> UNNotificationAttachment? {
+        guard
+            let reaction = item.felmoReaction,
+            Self.supportedFelmoReactions.contains(reaction),
+            let imageURL = Bundle.main.url(forResource: "felmo-\(reaction)", withExtension: "png")
+        else { return nil }
+
+        return try? UNNotificationAttachment(
+            identifier: "felmo.\(reaction)",
+            url: imageURL,
+            options: [UNNotificationAttachmentOptionsThumbnailHiddenKey: false]
+        )
     }
 
     private func stateDictionary(message: String? = nil) async -> [String: Any] {
