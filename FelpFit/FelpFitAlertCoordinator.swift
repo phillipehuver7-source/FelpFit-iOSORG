@@ -28,40 +28,6 @@ struct FelpFitScheduleItem: Hashable, Codable {
     let defaultUrgent: Bool?
     let felmoReaction: String?
 
-    init(
-        key: String,
-        preferenceKey: String,
-        title: String,
-        body: String,
-        kind: Kind,
-        hour: Int,
-        minute: Int,
-        weekdays: [Int],
-        fireAtMilliseconds: Double?,
-        questionID: String?,
-        dateKey: String?,
-        calendarDate: String?,
-        category: String,
-        defaultUrgent: Bool?,
-        felmoReaction: String?
-    ) {
-        self.key = key
-        self.preferenceKey = preferenceKey
-        self.title = title
-        self.body = body
-        self.kind = kind
-        self.hour = hour
-        self.minute = minute
-        self.weekdays = weekdays
-        self.fireAtMilliseconds = fireAtMilliseconds
-        self.questionID = questionID
-        self.dateKey = dateKey
-        self.calendarDate = calendarDate
-        self.category = category
-        self.defaultUrgent = defaultUrgent
-        self.felmoReaction = felmoReaction
-    }
-
     init?(dictionary: [String: Any]) {
         guard
             let key = dictionary["key"] as? String,
@@ -719,7 +685,8 @@ private extension FelpFitScheduleItem {
         dateKey: String?,
         calendarDate: String?,
         category: String,
-        defaultUrgent: Bool? = nil
+        defaultUrgent: Bool? = nil,
+        felmoReaction: String? = nil
     ) {
         self.key = key
         self.preferenceKey = preferenceKey
@@ -735,5 +702,6 @@ private extension FelpFitScheduleItem {
         self.calendarDate = calendarDate
         self.category = category
         self.defaultUrgent = defaultUrgent ?? (category == "mission")
+        self.felmoReaction = felmoReaction
     }
 }
