@@ -527,9 +527,17 @@ final class FelpFitAlertCoordinator {
     private func felmoNotificationAttachment(for item: FelpFitScheduleItem) -> UNNotificationAttachment? {
         guard
             let reaction = item.felmoReaction,
-            Self.supportedFelmoReactions.contains(reaction),
-            let imageURL = Bundle.main.url(forResource: "felmo-\(reaction)", withExtension: "png")
+            Self.supportedFelmoReactions.contains(reaction)
         else { return nil }
+
+        let resourceName = "felmo-\(reaction)"
+        let imageURL = Bundle.main.url(forResource: resourceName, withExtension: "png")
+            ?? Bundle.main.url(
+                forResource: resourceName,
+                withExtension: "png",
+                subdirectory: "FelmoNotificationReactions"
+            )
+        guard let imageURL else { return nil }
 
         return try? UNNotificationAttachment(
             identifier: "felmo.\(reaction)",
