@@ -26,6 +26,13 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+      - name: Embed Felmo notification reactions
+        script: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/FelpFit.app"
+          test -d "$APP_PATH"
+          ditto \
+            "FelpFit/FelmoNotificationReactions" \
+            "$APP_PATH/FelmoNotificationReactions"
       - name: Package unsigned IPA
         script: |
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/FelpFit.app"
@@ -36,6 +43,7 @@ workflows:
           /usr/bin/zip -qry ../FelpFit-unsigned.ipa Payload
       - name: Verify packaged capability build
         script: |
+          set -euxo pipefail
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/FelpFit.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "152"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "app.felpfit.ios"
